@@ -1,0 +1,43 @@
+[build-system]
+requires = [
+  "setuptools>=68",
+  "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "langchain-envector"
+version = "0.1.0"
+description = "LangChain VectorStore integration for Envector (ES2) encrypted vector search"
+readme = "README.md"
+requires-python = ">=3.9,<3.14"
+authors = [
+  { name = "Envector Contributors" }
+]
+dependencies = [
+  "es2==1.0.3rc7",
+  "langchain>=0.2.0",
+]
+keywords = ["langchain", "vectorstore", "homomorphic-encryption", "ckks", "encrypted-search", "envector", "es2"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: OS Independent",
+  "Intended Audience :: Developers",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.urls]
+Homepage = "https://example.com/"
+Repository = "https://example.com/repo"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["libs"]
+include = ["envector*"]
