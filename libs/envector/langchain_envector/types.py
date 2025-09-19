@@ -39,17 +39,57 @@ def pack_metadata(text: str, metadata: Optional[Dict[str, Any]] = None) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def unpack_metadata(s: str) -> Dict[str, Any]:
+def unpack_metadata(raw: Any) -> Dict[str, Any]:
+    """Return metadata as a dict regardless of the raw payload type.
+
+    Recent ES2 versions may return decrypted metadata as a Python dict instead
+    of the JSON string we originally stored. We normalise the payload here so
+    downstream code always works with a dictionary.
+    """
+
     import json
 
-    try:
-        data = json.loads(s)
-        if not isinstance(data, dict):
-            raise ValueError("metadata json must be an object")
-        return data
-    except Exception:
-        # Fallback: store raw string under "_raw"
-        return {"_raw": s}
+    # Already a dict → nothing to do.
+    if isinstance(raw, dict):
+        return raw
+
+    print("slafjklshglkhslafhlksadjlghsal;hf")
+
+    # Some responses wrap the payload in a single-element list.
+    if isinstance(raw, (list, tuple)):
+        if len(raw) == 1:
+            return unpack_metadata(raw[0])
+        return {"_raw": list(raw)}
+
+    if raw is None:
+        return {"_raw": None}
+
+    # Decode bytes before attempting JSON parsing.
+    if isinstance(raw, (bytes, bytearray)):
+        try:
+            raw = raw.decode("utf-8")
+        except Exception:
+            return {"_raw": raw}
+
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            # Some ES2 responses return Python-literal strings (single quotes).
+            try:
+                import ast
+
+                data = ast.literal_eval(raw)
+                if isinstance(data, dict):
+                    return data
+            except Exception:
+                pass
+        return {"_raw": raw}
+
+    # Fallback: expose the raw object for debugging purposes.
+    return {"_raw": raw}
 
 
 # --- Embeddings adaptation helpers -----------------------------------------------------

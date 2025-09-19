@@ -10,12 +10,13 @@ name = "langchain-envector"
 version = "0.1.0"
 description = "LangChain VectorStore integration for Envector (ES2) encrypted vector search"
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.9,<3.14"
 authors = [
   { name = "Envector Contributors" }
 ]
 dependencies = [
-  "es2==1.0.3rc7",
+  "es2==1.1.0rc1",
   "langchain>=0.2.0",
 ]
 keywords = ["langchain", "vectorstore", "homomorphic-encryption", "ckks", "encrypted-search", "envector", "es2"]
@@ -37,7 +38,8 @@ Repository = "https://example.com/repo"
 
 [tool.setuptools]
 include-package-data = true
+packages = ["langchain_envector"]
+package-dir = { "langchain_envector" = "libs/envector/langchain_envector" }
 
-[tool.setuptools.packages.find]
-where = ["libs"]
-include = ["envector*"]
+[tool.setuptools.package-data]
+langchain_envector = ["py.typed"]

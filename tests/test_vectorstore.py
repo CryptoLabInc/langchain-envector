@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import re
 
-from libs.envector.config import ConnectionConfig, EnvectorConfig, IndexSettings, KeyConfig
-from libs.envector.vectorstore import Envector
+from langchain_envector.config import ConnectionConfig, EnvectorConfig, IndexSettings, KeyConfig
+from langchain_envector.vectorstore import Envector
 
 from .conftest import FakeClient, FakeEmbeddings, FakeIndex
 
@@ -78,6 +78,21 @@ def test_similarity_search_uses_raw_text_when_not_json():
     assert docs[0].page_content == "Plain text content without JSON"
     # user metadata should be empty dict when not provided
     assert all(k in docs[0].metadata for k in ["_score", "_id"])  # only system fields present
+
+
+def test_similarity_search_handles_python_literal_metadata():
+    index = FakeIndex()
+    literal = str({"text": "Literal", "metadata": {"tag": "py"}})
+    index.search_payload = [[
+        {"id": "pos-lit", "score": 0.7, "metadata": literal},
+    ]]
+    client = FakeClient(index)
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    docs = store.similarity_search("q", k=1)
+    assert len(docs) == 1
+    assert docs[0].page_content == "Literal"
+    assert docs[0].metadata.get("tag") == "py"
 
 
     # dict-type metadata is not supported currently; only text-based

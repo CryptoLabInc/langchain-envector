@@ -5,8 +5,8 @@ import secrets
 import time
 import pytest
 
-from libs.envector.config import ConnectionConfig, EnvectorConfig, IndexSettings, KeyConfig
-from libs.envector.vectorstore import Envector
+from langchain_envector.config import ConnectionConfig, EnvectorConfig, IndexSettings, KeyConfig
+from langchain_envector.vectorstore import Envector
 
 
 pytestmark = pytest.mark.integration
@@ -71,6 +71,10 @@ def test_e2e_vectorstore_plain_and_cipher():
 
     base_index_name = os.environ.get("ES2_INDEX_NAME", f"inttest_{secrets.token_hex(4)}")
 
+    import es2
+    es2.init_connect(address=address)
+    es2.reset()
+
     # Plain query mode
     cfg_plain = EnvectorConfig(
         connection=ConnectionConfig(address=address),
@@ -93,6 +97,8 @@ def test_e2e_vectorstore_plain_and_cipher():
             {k: row.get(k) for k in hf_meta_cols if k in row}
             for row in ds
         ]
+        print(texts[0])
+        print(metas[0])
     else:
         texts = ["machine learning accelerates research", "cooking recipes are delicious"]
         metas = [{"label": "A"}, {"label": "B"}]
