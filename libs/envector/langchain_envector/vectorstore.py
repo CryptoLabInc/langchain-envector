@@ -90,12 +90,12 @@ class Envector(VectorStore):  # type: ignore[misc]
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
 
         # Insert using high-level ES2 Index
-        res = self.client.index.insert(data=vectors, metadata=packed)
-        print(f"{res=}")
+        result_ids = self.client.index.insert(data=vectors, metadata=packed)
+        print(f"{result_ids=}")
 
         # Return ephemeral placeholders to satisfy VectorStore interface,
         # but they are NOT persisted/addressable.
-        return [f"ephemeral-{uuid4()}" for _ in texts]
+        return result_ids
 
     def similarity_search(
         self,
