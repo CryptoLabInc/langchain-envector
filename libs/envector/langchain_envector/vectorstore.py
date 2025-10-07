@@ -90,7 +90,8 @@ class Envector(VectorStore):  # type: ignore[misc]
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
 
         # Insert using high-level ES2 Index
-        self.client.index.insert(data=vectors, metadata=packed)
+        res = self.client.index.insert(data=vectors, metadata=packed)
+        print(f"{res=}")
 
         # Return ephemeral placeholders to satisfy VectorStore interface,
         # but they are NOT persisted/addressable.
