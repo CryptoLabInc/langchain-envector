@@ -198,20 +198,19 @@ jobs:
           while true; do
             ATTEMPTS=$((ATTEMPTS + 1))
             echo "Attempt ${ATTEMPTS} of ${MAX_ATTEMPTS}..."
-            if python -m pip install --extra-index-url https://test.pypi.org/simple/ "langchaine-envector==${WHEEL_VERSION}"; then
-              echo "Successfully installed langchaine-envector."
+            if python -m pip install --extra-index-url https://test.pypi.org/simple/ "langchain-envector==${WHEEL_VERSION}"; then
+              echo "Successfully installed langchain-envector."
               break
             fi
 
             if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
-              echo "Failed to install langchaine-envector after ${MAX_ATTEMPTS} attempts. Exiting."
+              echo "Failed to install langchain-envector after ${MAX_ATTEMPTS} attempts. Exiting."
               exit 1
             fi
 
             echo "Installation failed. Waiting ${SLEEP_SECONDS} seconds before retrying..."
             sleep "${SLEEP_SECONDS}"
           done
-          echo "01234567890123456789012345678901" > aes.kek
           pip install pytest 
           pytest . -v
 
