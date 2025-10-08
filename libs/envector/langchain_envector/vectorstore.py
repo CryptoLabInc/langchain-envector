@@ -67,7 +67,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         *,
         vectors: Optional[List[List[float]]] = None,
         **kwargs: Any,
-    ) -> List[str]:
+    ) -> List[int]:
         """Add texts to the encrypted index.
 
         If embeddings are provided, the texts are embedded automatically.
@@ -90,11 +90,11 @@ class Envector(VectorStore):  # type: ignore[misc]
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
 
         # Insert using high-level ES2 Index
-        self.client.index.insert(data=vectors, metadata=packed)
+        result_ids = self.client.index.insert(data=vectors, metadata=packed)
 
         # Return ephemeral placeholders to satisfy VectorStore interface,
         # but they are NOT persisted/addressable.
-        return [f"ephemeral-{uuid4()}" for _ in texts]
+        return result_ids
 
     def similarity_search(
         self,
