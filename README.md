@@ -13,7 +13,7 @@ Encrypted vector search for LangChain using Envector (ES2), powered by homomorph
   - `python3.11 -m venv .venv && source .venv/bin/activate`
 - Install runtime dependencies:
   - `pip install -U pip setuptools wheel`
-  - `pip install es2==1.1.0rc1 langchain sentence-transformers`
+  - `pip install es2==1.1.0rc2 langchain sentence-transformers`
 
 ## Usage Overview
 1. Configure Envector using `EnvectorConfig`, pointing to your ES2 endpoint and keys.
