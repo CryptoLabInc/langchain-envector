@@ -24,7 +24,8 @@ class FakeIndex:
 
     def insert(self, data: List[List[float]], metadata: List[str]):
         self.inserted.append({"data": data, "metadata": metadata})
-        return self
+        batch_idx = len(self.inserted) - 1
+        return [len(self.inserted)+i+1 for i in range(len(metadata))]
 
     def search(self, query: List[float], top_k: int, output_fields: List[str]):
         if self.search_payload is not None:

@@ -16,15 +16,15 @@ def _cfg() -> EnvectorConfig:
     )
 
 
-def test_add_texts_ignores_ids_and_returns_ephemeral():
+def test_add_texts_ignores_ids_and_returns_item_ids():
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
     ret_ids = store.add_texts(["t1", "t2"], metadatas=[{"m": 1}, {"m": 2}], ids=["a", "b"])  # ids ignored
 
-    # Returned IDs are ephemeral placeholders
+    # Returned IDs
     assert len(ret_ids) == 2
-    assert all(re.match(r"^ephemeral-", i) for i in ret_ids)
+    assert ret_ids == [2, 3]
 
     # Stored metadata must not contain id
     assert len(client.index.inserted) == 1
