@@ -1,0 +1,270 @@
+name: Build Wheels per OS, TestPyPI, Docker e2e, Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+      - 'v[0-9]*.[0-9]*.[0-9]*rc[0-9]*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to upload"
+        required: true
+        default: "0.0.0"
+      deploy_env :
+        description: "Set deploy environment (e.g. testpypi or pypi)"
+        required: true
+        default: "testpypi"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  WHEEL_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.version }}
+  DEPLOY_ENV: ${{ github.event_name == 'push' && 'pypi' || github.event.inputs.deploy_env }}
+
+jobs:
+  ## ============================================
+  ## ========= Build wheel linux & mac ==========
+  ## ============================================
+  build-wheel-per-os:
+    runs-on: ${{ matrix.os.runs-on }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.CI_PAT }}
+    outputs:
+      wheel_version: ${{ steps.ver.outputs.wheel_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [
+          { name: "linux", runs-on: [self-hosted, linux, no-gpu]}
+        ]
+    steps:
+    - name: Pre-clean (self-hosted)
+      run: |
+        git submodule deinit -f --all || true
+        rm -rf .git/modules || true
+        git reset --hard || true
+        git clean -ffdx || true
+    - name: Resolve WHEEL_VERSION
+      id: ver
+      shell: bash
+      run: |
+        if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+          ver="${GITHUB_REF_NAME#v}"
+        else
+          ver="${{ inputs.version }}"
+        fi
+        echo "wheel_version=$ver" >> "$GITHUB_OUTPUT"
+
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: "recursive"
+        token: ${{ secrets.CI_PAT }}
+
+    - name: Setting python environment (linux)
+      if: matrix.os.name == 'linux'
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Run Python tests (linux)
+      if: matrix.os.name == 'linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m venv .venv
+        python -m pip install --upgrade pip
+        source .venv/bin/activate
+        pip install build
+        ./scripts/fix_wheel_version.sh
+        python -m build
+        ls dist
+
+    - name: Upload wheel as artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.run_id }}
+        path: ./dist/*.whl
+        retention-days: 1
+
+    - name: Pre-clean (self-hosted)
+      run: |
+        git submodule deinit -f --all || true
+        rm -rf .git/modules || true
+        git reset --hard || true
+        git clean -ffdx || true
+
+  # ============================================
+  # ========== Release to test PYPI ============
+  # ============================================
+  release-to-testpypi :
+    needs: [build-wheel-per-os]
+    runs-on: self-hosted
+    env:
+      TWINE_USERNAME: "__token__"
+      TWINE_PASSWORD: ${{ secrets.TEST_PYPI_PASSWORD }}
+      WHEEL_VERSION: ${{ needs.build-wheel-per-os.outputs.wheel_version }}
+    outputs:
+      wheel_version: ${{ needs.build-wheel-per-os.outputs.wheel_version }}
+    steps:
+    - name: Pre-clean (self-hosted)
+      run: |
+        git submodule deinit -f --all || true
+        rm -rf .git/modules || true
+        git reset --hard || true
+        git clean -ffdx || true
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setting python environment
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Download wheel artifact
+      uses: actions/download-artifact@v4
+      with:
+        merge-multiple: true
+        path: ./dist/
+
+    - name: Publish to testpypi
+      run: |
+        python -m venv .venv
+        source .venv/bin/activate
+        python -m pip install --upgrade twine
+        twine upload --repository-url https://test.pypi.org/legacy/ --skip-existing --verbose ./dist/*.whl
+
+    - name: Pre-clean (self-hosted)
+      run: |
+        git submodule deinit -f --all || true
+        rm -rf .git/modules || true
+        git reset --hard || true
+        git clean -ffdx || true
+
+  ## ============================================
+  ## =======  PyTest with TestPyPI Wheels =======
+  ## ============================================
+  pytest-with-testpypi-wheels:
+    needs: release-to-testpypi
+    runs-on: self-hosted
+    strategy:
+      fail-fast: false
+    env:
+      TWINE_USERNAME: "__token__"
+      TWINE_PASSWORD: ${{ secrets.TEST_PYPI_PASSWORD }}
+      WHEEL_VERSION: ${{ needs.release-to-testpypi.outputs.wheel_version }}
+    outputs:
+      wheel_version : ${{ needs.release-to-testpypi.outputs.wheel_version }}
+    steps:
+      - name: Pre-clean (self-hosted)
+        run: |
+          git submodule deinit -f --all || true
+          rm -rf .git/modules || true
+          git reset --hard || true
+          git clean -ffdx || true
+      - name: Set github url and credentials
+        run: |
+          git config --global url."https://${{ secrets.CI_PAT }}@github.com".insteadOf "https://github.com"
+          git config --global url."https://${{ secrets.CI_PAT }}@github.com/".insteadOf "git@github.com:"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+          token: ${{ secrets.CI_PAT }}
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.12
+
+      - name: Install wheel from TestPyPI
+        run: |
+          set -euo pipefail
+          export PATH=$HOME/.local/bin:$HOME/.pyenv/bin:$(pyenv root)/shims:$PWD/.venv/bin:$PATH
+          pip install virtualenv
+          virtualenv -p python3.12 .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+
+          MAX_ATTEMPTS=30
+          SLEEP_SECONDS=10
+
+          echo "Attempting to install es2==${WHEEL_VERSION} from TestPyPI..."
+          ATTEMPTS=0
+          while true; do
+            ATTEMPTS=$((ATTEMPTS + 1))
+            echo "Attempt ${ATTEMPTS} of ${MAX_ATTEMPTS}..."
+            if python -m pip install --extra-index-url https://test.pypi.org/simple/ "langchaine-envector==${WHEEL_VERSION}"; then
+              echo "Successfully installed langchaine-envector."
+              break
+            fi
+
+            if [ "${ATTEMPTS}" -ge "${MAX_ATTEMPTS}" ]; then
+              echo "Failed to install langchaine-envector after ${MAX_ATTEMPTS} attempts. Exiting."
+              exit 1
+            fi
+
+            echo "Installation failed. Waiting ${SLEEP_SECONDS} seconds before retrying..."
+            sleep "${SLEEP_SECONDS}"
+          done
+          echo "01234567890123456789012345678901" > aes.kek
+          pip install pytest 
+          pytest . -v
+
+      - name: Pre-clean (self-hosted)
+        run: |
+          git submodule deinit -f --all || true
+          rm -rf .git/modules || true
+          git reset --hard || true
+          git clean -ffdx || true
+
+  ## ============================================
+  ## ============= Release to PyPI ==============
+  ## ============================================
+  release-to-pypi:
+    if: ${{ github.event_name == 'push' || github.event.inputs.deploy_env == 'pypi' }}
+    needs: pytest-with-testpypi-wheels
+    runs-on: self-hosted
+    env:
+      TWINE_USERNAME: "__token__"
+      TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+      WHEEL_VERSION: ${{ needs.pytest-with-testpypi-wheels.outputs.wheel_version }}
+    steps:
+    - name: Pre-clean (self-hosted)
+      run: |
+        git submodule deinit -f --all || true
+        rm -rf .git/modules || true
+        git reset --hard || true
+        git clean -ffdx || true
+
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setting python environment
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Download wheel artifact
+      uses: actions/download-artifact@v4
+      with:
+        merge-multiple: true
+        path: ./dist
+
+    - name: Publish to pypi
+      run: |
+        python -m venv .venv
+        source .venv/bin/activate
+        python -m pip install --upgrade twine
+        twine upload --verbose ./dist/*.whl
+
+    - name: Pre-clean (self-hosted)
+      run: |
+        git submodule deinit -f --all || true
+        rm -rf .git/modules || true
+        git reset --hard || true
+        git clean -ffdx || true
