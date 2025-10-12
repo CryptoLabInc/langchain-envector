@@ -79,4 +79,3 @@ class EnvectorClient:
         if self._es2 is None:
             raise RuntimeError("Client not initialized. Call init().")
         return self._es2
-

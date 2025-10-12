@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from langchain_envector.config import ConnectionConfig, EnvectorConfig, IndexSettings, KeyConfig
-from langchain_envector.vectorstore import Envector
+from langchain_envector.vectorstore import Envector, Document as LC_Document
 
 from .conftest import FakeClient, FakeEmbeddings, FakeIndex
 
@@ -96,3 +96,94 @@ def test_similarity_search_handles_python_literal_metadata():
 
 
     # dict-type metadata is not supported currently; only text-based
+
+
+def test_similarity_search_by_vector_with_filter_and_threshold():
+    index = FakeIndex()
+    index.search_payload = [[
+        {"id": "v-0", "score": 0.88, "metadata": "{\"text\": \"Keep\", \"metadata\": {\"k\": 1}}"},
+        {"id": "v-1", "score": 0.30, "metadata": "{\"text\": \"Drop\", \"metadata\": {\"k\": 2}}"},
+    ]]
+    client = FakeClient(index)
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    # Explicit vector search (bypasses embed_query), with filter/threshold
+    docs = store.similarity_search_by_vector([0.0, 0.0, 0.0, 0.0], k=5, filter={"k": 1}, score_threshold=0.5)
+    assert len(docs) == 1
+    assert docs[0].page_content == "Keep"
+    assert docs[0].metadata["_score"] >= 0.5
+
+
+def test_from_texts_inserts_using_embeddings():
+    client = FakeClient()
+    store = Envector.from_texts(
+        ["A", "B"],
+        metadatas=[{"m": "a"}, {"m": "b"}],
+        embeddings=FakeEmbeddings(dim=4),
+        config=_cfg(),
+        client=client,
+    )
+    assert isinstance(store, Envector)
+    # One batch inserted
+    assert len(client.index.inserted) == 1
+    # Two items packed
+    assert len(client.index.inserted[0]["metadata"]) == 2
+
+
+def test_from_documents_paths_through_to_texts():
+    client = FakeClient()
+    docs = [
+        LC_Document(page_content="X", metadata={"a": 1}),
+        LC_Document(page_content="Y", metadata={"a": 2}),
+    ]
+    store = Envector.from_documents(docs, embeddings=FakeEmbeddings(dim=4), config=_cfg(), client=client)
+    assert isinstance(store, Envector)
+    assert len(client.index.inserted) == 1
+    packed = client.index.inserted[0]["metadata"]
+    # Texts preserved
+    assert any("\"text\": \"X\"" in m for m in packed)
+    assert any("\"text\": \"Y\"" in m for m in packed)
+
+
+def test_add_documents_with_embeddings():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    docs = [
+        LC_Document(page_content="C1", metadata={"s": 1}),
+        LC_Document(page_content="C2", metadata={"s": 2}),
+    ]
+    ret = store.add_documents(docs)
+    assert len(ret) == 2
+    assert len(client.index.inserted) == 1
+    packed = client.index.inserted[0]["metadata"]
+    assert any("\"text\": \"C1\"" in m for m in packed)
+    assert any("\"text\": \"C2\"" in m for m in packed)
+
+
+def test_add_documents_requires_vectors_when_no_embeddings():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=None, client=client)
+    docs = [LC_Document(page_content="C", metadata={})]
+    try:
+        store.add_documents(docs)
+        assert False, "Expected ValueError when embeddings is None and no vectors provided"
+    except ValueError as e:
+        assert "embeddings is None and vectors not provided" in str(e)
+
+
+def test_add_documents_with_explicit_vectors():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=None, client=client)
+
+    docs = [
+        LC_Document(page_content="V1", metadata={"k": "a"}),
+        LC_Document(page_content="V2", metadata={"k": "b"}),
+    ]
+    vecs = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+    ]
+    ret = store.add_documents(docs, vectors=vecs)
+    assert len(ret) == 2
+    assert len(client.index.inserted) == 1

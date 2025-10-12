@@ -178,6 +178,28 @@ class Envector(VectorStore):  # type: ignore[misc]
     # -------------------------------
     # Class constructors (LangChain compatibility)
     # -------------------------------
+    def add_documents(
+        self,
+        documents: List[Document],
+        ids: Optional[List[str]] = None,
+        *,
+        vectors: Optional[List[List[float]]] = None,
+        **kwargs: Any,
+    ) -> List[int]:
+        """Insert a list of Documents.
+
+        Mirrors LangChain's VectorStore API. Delegates to `add_texts` by
+        extracting `page_content` and `metadata` from each Document.
+
+        Notes:
+        - Manual `ids` are ignored (ES2 does not support user-provided IDs).
+        - When `embeddings` is not configured, you must supply `vectors`.
+        - Returns ephemeral IDs as produced by the client insert.
+        """
+        texts = [getattr(d, "page_content", "") for d in documents]
+        metadatas = [getattr(d, "metadata", {}) for d in documents]
+        return self.add_texts(texts=texts, metadatas=metadatas, ids=ids, vectors=vectors, **kwargs)
+
     @classmethod
     def from_texts(
         cls,

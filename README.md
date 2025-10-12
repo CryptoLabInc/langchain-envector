@@ -18,7 +18,7 @@ Encrypted vector search for LangChain using Envector (ES2), powered by homomorph
 ## Usage Overview
 1. Configure Envector using `EnvectorConfig`, pointing to your ES2 endpoint and keys.
 2. Initialize embeddings (or provide pre-computed vectors).
-3. Instantiate `Envector(config=cfg, embeddings=emb)` and call `add_texts` or `as_retriever`.
+3. Instantiate `Envector(config=cfg, embeddings=emb)` and call `add_texts`, `add_documents`, or use `as_retriever`.
 4. Run `similarity_search` or plug the retriever into your LangChain pipeline.
 
 > See `notebooks/` for end-to-end walkthroughs and the `libs/envector` package for implementation details.
@@ -41,10 +41,30 @@ Key dataclasses live in `libs/envector/config.py`:
 - Manual item IDs are not accepted; returned IDs from `add_texts` are ephemeral.
 - Filtering happens client-side; ensure metadata is JSON for structured filters.
 
+## Examples
+- Add documents (from LangChain Documents):
+  - Python
+    - from langchain_core.documents import Document
+    - docs = [
+        Document(page_content="chunk-1", metadata={"source": "paper.pdf", "page": 1, "chunk": 0}),
+        Document(page_content="chunk-2", metadata={"source": "paper.pdf", "page": 1, "chunk": 1}),
+      ]
+    - store = Envector(config=cfg, embeddings=emb)
+    - store.add_documents(docs)
+
 ## Troubleshooting
 - Connection issues: verify ES2 address and registered keys.
 - Embeddings mismatch: ensure embedding dimension equals `index.dim` when supplying vectors.
 - Unexpected raw strings: confirm inserts used the JSON envelope.
+
+## Testing Without ES2
+- Run unit tests offline (no ES2 or SDK required):
+  - `python -m pytest -q -m "not integration"`
+  - or `python run_unit_tests.py`
+- Run integration tests (requires server and keys):
+  - Export `ES2_ADDRESS`, `ES2_KEY_PATH`, `ES2_KEY_ID`
+  - Optional: `ES2_USE_EMBEDDINGS=1`, `ES2_EMB_MODEL`, `ES2_USE_HF_DATASET=1`
+  - `python -m pytest -q -m integration -s`
 
 ## Contributing
 See [`CONTRIBUTE.md`](CONTRIBUTE.md) for development, testing, and PR guidelines.
