@@ -13,4 +13,3 @@ if _PKG_DIR.is_dir():
     pkg_path = str(_PKG_DIR)
     if pkg_path not in sys.path:
         sys.path.insert(0, pkg_path)
-

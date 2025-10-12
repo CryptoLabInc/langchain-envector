@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple, Union, overload
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 
 class Embeddings(Protocol):
@@ -10,10 +10,14 @@ class Embeddings(Protocol):
     LangChain-compatible embeddings typically implement these two methods.
     """
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:  # pragma: no cover - interface only
+    def embed_documents(
+        self, texts: List[str]
+    ) -> List[List[float]]:  # pragma: no cover - interface only
         ...
 
-    def embed_query(self, text: str) -> List[float]:  # pragma: no cover - interface only
+    def embed_query(
+        self, text: str
+    ) -> List[float]:  # pragma: no cover - interface only
         ...
 
 
@@ -94,8 +98,13 @@ def unpack_metadata(raw: Any) -> Dict[str, Any]:
 
 # --- Embeddings adaptation helpers -----------------------------------------------------
 
+
 class _CallableEmbeddings:
-    def __init__(self, docs_fn: Callable[[List[str]], List[List[float]]], query_fn: Callable[[str], List[float]]):
+    def __init__(
+        self,
+        docs_fn: Callable[[List[str]], List[List[float]]],
+        query_fn: Callable[[str], List[float]],
+    ):
         self._docs_fn = docs_fn
         self._query_fn = query_fn
 
@@ -132,7 +141,12 @@ def as_embeddings(emb: Any) -> Embeddings:
         return _CallableEmbeddings(docs_fn, query_fn)
 
     # Case 3: Tuple of callables
-    if isinstance(emb, tuple) and len(emb) == 2 and callable(emb[0]) and callable(emb[1]):
+    if (
+        isinstance(emb, tuple)
+        and len(emb) == 2
+        and callable(emb[0])
+        and callable(emb[1])
+    ):
         docs_fn, query_fn = emb  # type: ignore[assignment]
         return _CallableEmbeddings(docs_fn, query_fn)
 

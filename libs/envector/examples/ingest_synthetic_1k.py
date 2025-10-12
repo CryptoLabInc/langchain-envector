@@ -19,7 +19,12 @@ import json
 from pathlib import Path
 from typing import List
 
-from libs.envector.config import ConnectionConfig, EnvectorConfig, IndexSettings, KeyConfig
+from libs.envector.config import (
+    ConnectionConfig,
+    EnvectorConfig,
+    IndexSettings,
+    KeyConfig,
+)
 from libs.envector.vectorstore import Envector
 
 
@@ -34,7 +39,12 @@ def main():
     ap.add_argument("--key-path", required=True)
     ap.add_argument("--key-id", required=True)
     ap.add_argument("--index-name", required=True)
-    ap.add_argument("--dim", type=int, required=False, help="If omitted and --use-embeddings, infer from model.")
+    ap.add_argument(
+        "--dim",
+        type=int,
+        required=False,
+        help="If omitted and --use-embeddings, infer from model.",
+    )
     ap.add_argument("--dataset", default="data/synthetic_rag_1k.jsonl")
     ap.add_argument("--use-embeddings", action="store_true")
     ap.add_argument("--model", default="sentence-transformers/all-MiniLM-L6-v2")
@@ -52,7 +62,9 @@ def main():
 
     cfg = EnvectorConfig(
         connection=ConnectionConfig(address=args.address),
-        key=KeyConfig(key_path=args.key_path, key_id=args.key_id, preset="ip", eval_mode="rmp"),
+        key=KeyConfig(
+            key_path=args.key_path, key_id=args.key_id, preset="ip", eval_mode="rmp"
+        ),
         index=IndexSettings(
             index_name=args.index_name,
             dim=(args.dim if args.dim is not None else inferred_dim or 0),
@@ -76,7 +88,9 @@ def main():
         if embeddings is None:
             # Without embeddings, require manual vectors; here we simply skip.
             # Users should provide --use-embeddings or adapt to their vector source.
-            raise ValueError("--use-embeddings is required unless you provide vectors explicitly.")
+            raise ValueError(
+                "--use-embeddings is required unless you provide vectors explicitly."
+            )
         store.add_texts(t_batch, metadatas=m_batch)
 
     print(f"Inserted {len(texts)} documents into index '{args.index_name}'")

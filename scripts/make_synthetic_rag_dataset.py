@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import random
 from pathlib import Path
 
@@ -59,7 +58,7 @@ def make_sentence(topic: str) -> str:
 
 def make_paragraph(topic: str, min_sent: int = 3, max_sent: int = 7) -> str:
     n = random.randint(min_sent, max_sent)
-    return " " .join(make_sentence(topic) for _ in range(n))
+    return " ".join(make_sentence(topic) for _ in range(n))
 
 
 def main():
@@ -86,4 +85,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -39,4 +39,3 @@ class EnvectorConfig:
     key: KeyConfig
     index: IndexSettings
     create_if_missing: bool = True
-

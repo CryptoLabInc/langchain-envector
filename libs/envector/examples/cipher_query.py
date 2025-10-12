@@ -6,15 +6,24 @@ Server-side vectors remain encrypted as always.
 
 from __future__ import annotations
 
-from libs.envector.config import ConnectionConfig, EnvectorConfig, IndexSettings, KeyConfig
+from libs.envector.config import (
+    ConnectionConfig,
+    EnvectorConfig,
+    IndexSettings,
+    KeyConfig,
+)
 from libs.envector.vectorstore import Envector
 
 
 def main():
     cfg = EnvectorConfig(
         connection=ConnectionConfig(address="localhost:50050"),
-        key=KeyConfig(key_path="./keys", key_id="example_key", preset="ip", eval_mode="rmp"),
-        index=IndexSettings(index_name="demo_cipher", dim=384, query_encryption="cipher"),
+        key=KeyConfig(
+            key_path="./keys", key_id="example_key", preset="ip", eval_mode="rmp"
+        ),
+        index=IndexSettings(
+            index_name="demo_cipher", dim=384, query_encryption="cipher"
+        ),
         create_if_missing=True,
     )
 
@@ -38,4 +47,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

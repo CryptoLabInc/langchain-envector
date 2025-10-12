@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-
 from langchain_envector.types import pack_metadata, unpack_metadata
 
 

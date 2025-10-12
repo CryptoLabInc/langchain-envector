@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, Iterable, List, Optional, Sequence
-from uuid import uuid4
-
+from typing import Any, Dict, List, Optional
 from .config import EnvectorConfig
 from .client import EnvectorClient
 from .types import Embeddings, as_embeddings, pack_metadata, unpack_metadata
@@ -21,12 +18,15 @@ def _try_import_langchain():
     except Exception:  # pragma: no cover - optional dependency
         # Minimal shim if LangChain is not installed
         class Document:  # type: ignore
-            def __init__(self, page_content: str, metadata: Optional[Dict[str, Any]] = None):
+            def __init__(
+                self, page_content: str, metadata: Optional[Dict[str, Any]] = None
+            ):
                 self.page_content = page_content
                 self.metadata = metadata or {}
 
     try:
         from langchain_core.vectorstores import VectorStore as _VectorStore  # type: ignore
+
         VectorStoreBase = _VectorStore
     except Exception:  # pragma: no cover - optional dependency
         pass
@@ -119,9 +119,15 @@ class Envector(VectorStore):  # type: ignore[misc]
 
         top_k = fetch_k or self.config.index.fetch_k or k
 
-        results = self.client.index.search(query=embedding, top_k=top_k, output_fields=self.config.index.output_fields)
+        results = self.client.index.search(
+            query=embedding, top_k=top_k, output_fields=self.config.index.output_fields
+        )
         # ES2 Index.search returns a list for each query; we passed single query
-        result = results[0] if isinstance(results, list) and results and isinstance(results[0], list) else results
+        result = (
+            results[0]
+            if isinstance(results, list) and results and isinstance(results[0], list)
+            else results
+        )
 
         docs = []
         # Iterate from top-1 to top-k
@@ -129,7 +135,7 @@ class Envector(VectorStore):  # type: ignore[misc]
             # item = {"id": ..., "score": float, "metadata": [str] or {...}}
             score = float(item.get("score", 0.0))
             md_obj_raw = item.get("metadata")
-        
+
             # Metadata encryption/decryption is handled by the SDK.
             # Envector currently supports a single associated data field (string).
             # Convention: if the string is JSON like {"text": str, "metadata": {...}},
@@ -148,7 +154,10 @@ class Envector(VectorStore):  # type: ignore[misc]
             if score_threshold is not None and score < score_threshold:
                 continue
 
-            doc = Document(page_content=text, metadata={**metadata, "_score": score, "_id": item.get("id")})
+            doc = Document(
+                page_content=text,
+                metadata={**metadata, "_score": score, "_id": item.get("id")},
+            )
             docs.append(doc)
 
         # Trim to k after filtering
@@ -198,7 +207,9 @@ class Envector(VectorStore):  # type: ignore[misc]
         """
         texts = [getattr(d, "page_content", "") for d in documents]
         metadatas = [getattr(d, "metadata", {}) for d in documents]
-        return self.add_texts(texts=texts, metadatas=metadatas, ids=ids, vectors=vectors, **kwargs)
+        return self.add_texts(
+            texts=texts, metadatas=metadatas, ids=ids, vectors=vectors, **kwargs
+        )
 
     @classmethod
     def from_texts(
@@ -233,7 +244,9 @@ class Envector(VectorStore):  # type: ignore[misc]
     ) -> "Envector":  # type: ignore[override]
         texts = [d.page_content for d in documents]
         metadatas = [getattr(d, "metadata", {}) for d in documents]
-        return cls.from_texts(texts=texts, metadatas=metadatas, embeddings=embeddings, **kwargs)
+        return cls.from_texts(
+            texts=texts, metadatas=metadatas, embeddings=embeddings, **kwargs
+        )
 
     # Optional: if LangChain is installed, this will be used; otherwise, users may call similarity_search directly.
     def as_retriever(self, **kwargs: Any):  # pragma: no cover - wrapper
@@ -244,7 +257,9 @@ class Envector(VectorStore):  # type: ignore[misc]
         except Exception:
             # Minimal shim if VectorStoreRetriever is unavailable
             class _Retriever:
-                def __init__(self, vs: Envector, search_kwargs: Optional[Dict[str, Any]] = None):
+                def __init__(
+                    self, vs: Envector, search_kwargs: Optional[Dict[str, Any]] = None
+                ):
                     self.vs = vs
                     self.search_kwargs = search_kwargs or {}
 
