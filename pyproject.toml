@@ -16,7 +16,7 @@ authors = [
   { name = "Envector Contributors" }
 ]
 dependencies = [
-  "es2==1.1.0rc2",
+  "es2",
   "langchain>=0.2.0",
 ]
 keywords = ["langchain", "vectorstore", "homomorphic-encryption", "ckks", "encrypted-search", "envector", "es2"]
