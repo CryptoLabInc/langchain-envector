@@ -1,7 +1,7 @@
 """Basic usage example for Envector VectorStore.
 
 Requirements:
-- `es2==1.0.3rc7`
+- `es2`
 - `langchain` (version providing VectorStore APIs)
 - An embeddings backend, e.g. sentence-transformers
 """
