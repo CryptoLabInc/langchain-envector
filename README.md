@@ -13,7 +13,7 @@ Encrypted vector search for LangChain using Envector (ES2), powered by homomorph
   - `python3.11 -m venv .venv && source .venv/bin/activate`
 - Install runtime dependencies:
   - `pip install -U pip setuptools wheel`
-  - `pip install es2==1.1.0rc2 langchain sentence-transformers`
+  - `pip install es2 langchain sentence-transformers`
 
 ## Usage Overview
 1. Configure Envector using `EnvectorConfig`, pointing to your ES2 endpoint and keys.
@@ -43,14 +43,16 @@ Key dataclasses live in `libs/envector/config.py`:
 
 ## Examples
 - Add documents (from LangChain Documents):
-  - Python
-    - from langchain_core.documents import Document
-    - docs = [
-        Document(page_content="chunk-1", metadata={"source": "paper.pdf", "page": 1, "chunk": 0}),
-        Document(page_content="chunk-2", metadata={"source": "paper.pdf", "page": 1, "chunk": 1}),
-      ]
-    - store = Envector(config=cfg, embeddings=emb)
-    - store.add_documents(docs)
+
+  ```python
+  from langchain_core.documents import Document
+  docs = [
+    Document(page_content="chunk-1", metadata={"source": "paper.pdf", "page": 1, "chunk": 0}),
+    Document(page_content="chunk-2", metadata={"source": "paper.pdf", "page": 1, "chunk": 1}),
+  ]
+  store = Envector(config=cfg, embeddings=emb)
+  store.add_documents(docs)
+  ```
 
 ## Troubleshooting
 - Connection issues: verify ES2 address and registered keys.
