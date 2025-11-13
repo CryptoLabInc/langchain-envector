@@ -13,7 +13,7 @@ Encrypted vector search for LangChain using Envector (ES2), powered by homomorph
   - `python3.11 -m venv .venv && source .venv/bin/activate`
 - Install runtime dependencies:
   - `pip install -U pip setuptools wheel`
-  - `pip install es2==1.1.0rc2 langchain sentence-transformers`
+  - `pip install es2 langchain sentence-transformers`
 
 ## Usage Overview
 1. Configure Envector using `EnvectorConfig`, pointing to your ES2 endpoint and keys.
@@ -27,7 +27,7 @@ Encrypted vector search for LangChain using Envector (ES2), powered by homomorph
 Key dataclasses live in `libs/envector/config.py`:
 - `ConnectionConfig`: address or host/port for ES2.
 - `KeyConfig`: key path, key ID, optional preset/eval mode.
-- `IndexSettings`: index name, dimension (16–4096), query encryption mode, optional output fields and fetch parameters.
+- `IndexSettings`: index name, dimension (32–4096), query encryption mode, optional output fields and fetch parameters.
 - `EnvectorConfig`: wraps the above and enables auto-creation via `create_if_missing`.
 
 ## Data Model
@@ -42,15 +42,42 @@ Key dataclasses live in `libs/envector/config.py`:
 - Filtering happens client-side; ensure metadata is JSON for structured filters.
 
 ## Examples
+- Configuration
+
+  ```python
+  from langchain_envector.config import ConnectionConfig, EnvectorConfig, IndexSettings, KeyConfig
+
+  cfg = EnvectorConfig(
+      connection=ConnectionConfig(address=ES2_ADDRESS, access_token=ES2_ACCESS_TOKEN),
+      key=KeyConfig(key_path=ES2_KEY_PATH, key_id=ES2_KEY_ID, preset="ip", eval_mode="rmp"),
+      index=IndexSettings(index_name=INDEX_NAME, dim=DIM),
+      create_if_missing=True,
+  )
+  ```
+
 - Add documents (from LangChain Documents):
-  - Python
-    - from langchain_core.documents import Document
-    - docs = [
-        Document(page_content="chunk-1", metadata={"source": "paper.pdf", "page": 1, "chunk": 0}),
-        Document(page_content="chunk-2", metadata={"source": "paper.pdf", "page": 1, "chunk": 1}),
-      ]
-    - store = Envector(config=cfg, embeddings=emb)
-    - store.add_documents(docs)
+
+  ```python
+  from langchain_core.documents import Document
+  from langchain_envector.vectorstore import Envector
+
+  docs = [Document(page_content="chunk-1", metadata={"source": "doc.pdf", "page": 1, "chunk": 0})]
+
+  store = Envector(config=cfg, embeddings=emb)
+  store.add_documents(docs)
+  ```
+
+  The method `add_texts` is also available to store texts.
+
+- Similarity search
+
+  ```python
+  results = store.similarity_search_with_score(query, k=3)
+  for doc, score in results:
+      print(f"* [SIM={score:3f}] {doc.page_content} [{doc.metadata}]")
+  ```
+
+  The methods `similarity_search` and `similarity_search_with_vector` are also available to perform vector search.
 
 ## Troubleshooting
 - Connection issues: verify ES2 address and registered keys.
