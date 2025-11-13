@@ -91,6 +91,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - Connection issues: verify ES2 address and registered keys.
 - Embeddings mismatch: ensure embedding dimension equals `index.dim` when supplying vectors.
 - Unexpected raw strings: confirm inserts used the JSON envelope.
+- Key Issues: check key's metadata to sync with the registered key if facing any key issue.
 
 ## Testing Without ES2
 - Run unit tests offline (no ES2 or SDK required):
