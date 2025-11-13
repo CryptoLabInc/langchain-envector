@@ -73,10 +73,10 @@ def test_e2e_vectorstore_plain_and_cipher():
             except Exception as e:
                 pytest.skip(f"Embeddings requested but unavailable: {e}")
     else:
-        dim = int(dim_env or "16")
+        dim = int(dim_env or "32")
 
-    if dim < 16 or dim > 4096:
-        pytest.skip("Envector supports dimensions in [16, 4096]")
+    if dim < 32 or dim > 4096:
+        pytest.skip("Envector supports dimensions in [32, 4096]")
 
     base_index_name = os.environ.get(
         "ES2_INDEX_NAME", f"inttest_{secrets.token_hex(4)}"

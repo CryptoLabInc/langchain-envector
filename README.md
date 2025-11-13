@@ -96,7 +96,7 @@ Key dataclasses live in `libs/envector/config.py`:
 ## Testing Without ES2
 - Run unit tests offline (no ES2 or SDK required):
   - `python -m pytest -q -m "not integration"`
-  - or `python run_unit_tests.py`
+  - or `python scripts/run_unit_tests.py`
 - Run integration tests (requires server and keys):
   - Export `ES2_ADDRESS`, `ES2_KEY_PATH`, `ES2_KEY_ID`
   - Optional: `ES2_USE_EMBEDDINGS=1`, `ES2_EMB_MODEL`, `ES2_USE_HF_DATASET=1`
