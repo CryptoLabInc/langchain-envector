@@ -102,7 +102,7 @@ jobs:
   # ============================================
   release-to-testpypi :
     needs: [build-wheel-per-os]
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, no-gpu]
     env:
       TWINE_USERNAME: "__token__"
       TWINE_PASSWORD: ${{ secrets.TEST_PYPI_PASSWORD }}
@@ -149,7 +149,7 @@ jobs:
   ## ============================================
   pytest-with-testpypi-wheels:
     needs: release-to-testpypi
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, no-gpu]
     strategy:
       fail-fast: false
     env:
@@ -184,7 +184,6 @@ jobs:
       - name: Install wheel from TestPyPI
         run: |
           set -euo pipefail
-          export PATH=$HOME/.local/bin:$HOME/.pyenv/bin:$(pyenv root)/shims:$PWD/.venv/bin:$PATH
           pip install virtualenv
           virtualenv -p python3.12 .venv
           source .venv/bin/activate
@@ -227,7 +226,7 @@ jobs:
   release-to-pypi:
     if: ${{ github.event_name == 'push' || github.event.inputs.deploy_env == 'pypi' }}
     needs: pytest-with-testpypi-wheels
-    runs-on: self-hosted
+    runs-on: [self-hosted, linux, no-gpu]
     env:
       TWINE_USERNAME: "__token__"
       TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
