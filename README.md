@@ -77,7 +77,7 @@ Key dataclasses live in `libs/envector/config.py`:
       print(f"* [SIM={score:3f}] {doc.page_content} [{doc.metadata}]")
   ```
 
-  The methods `similarity_search` and `similarity_search_with_vector` are also available to perform vector search.
+  The methods `similarity_search` and `similarity_search_with_vector` (with `embeddings.embed_query()`) are also available to perform vector search.
 
 ## Troubleshooting
 - Connection issues: verify ES2 address and registered keys.
