@@ -57,8 +57,6 @@ def unpack_metadata(raw: Any) -> Dict[str, Any]:
     if isinstance(raw, dict):
         return raw
 
-    print("slafjklshglkhslafhlksadjlghsal;hf")
-
     # Some responses wrap the payload in a single-element list.
     if isinstance(raw, (list, tuple)):
         if len(raw) == 1:
