@@ -47,9 +47,21 @@ Key dataclasses live in `libs/envector/config.py`:
   from langchain_envector.config import ConnectionConfig, EnvectorConfig, IndexSettings, KeyConfig
 
   cfg = EnvectorConfig(
-      connection=ConnectionConfig(address=ES2_ADDRESS, access_token=ES2_ACCESS_TOKEN) if ES2_ACCESS_TOKEN else ConnectionConfig(address=ES2_ADDRESS),
-      key=KeyConfig(key_path=ES2_KEY_PATH, key_id=ES2_KEY_ID, preset="ip", eval_mode="rmp"),
-      index=IndexSettings(index_name=INDEX_NAME, dim=vector_dim, query_encryption="cipher"),
+      connection=ConnectionConfig(
+        address=ES2_ADDRESS, 
+        access_token=ES2_ACCESS_TOKEN
+      ),
+      key=KeyConfig(
+        key_path=ES2_KEY_PATH, 
+        key_id=ES2_KEY_ID, 
+        preset="ip", 
+        eval_mode="rmp"
+      ),
+      index=IndexSettings(
+        index_name=INDEX_NAME, 
+        dim=vector_dim, 
+        query_encryption="cipher"
+      ),
       create_if_missing=True,
   )
   ```
@@ -61,8 +73,14 @@ Key dataclasses live in `libs/envector/config.py`:
   from langchain_envector.vectorstore import Envector
 
   docs = [
-    Document(page_content="chunk-1", metadata={"source": "paper.pdf", "page": 1, "chunk": 0}),
-    Document(page_content="chunk-2", metadata={"source": "paper.pdf", "page": 1, "chunk": 1}),
+    Document(
+      page_content="chunk-1", 
+      metadata={"source": "paper.pdf", "page": 1, "chunk": 0}
+    ),
+    Document(
+      page_content="chunk-2", 
+      metadata={"source": "paper.pdf", "page": 1, "chunk": 1}
+    ),
   ]
   
   store = Envector(config=cfg, embeddings=emb)
