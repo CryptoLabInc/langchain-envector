@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from .config import EnvectorConfig
 
 
@@ -34,7 +32,9 @@ class EnvectorClient:
         else:
             if not (c.host and c.port):
                 raise ValueError("Either address or host+port must be provided.")
-            es2_client.init_connect(host=c.host, port=c.port, access_token=c.access_token)
+            es2_client.init_connect(
+                host=c.host, port=c.port, access_token=c.access_token
+            )
 
         # Key path baseline for Index
         from es2.index import Index as _Index
@@ -79,4 +79,3 @@ class EnvectorClient:
         if self._es2 is None:
             raise RuntimeError("Client not initialized. Call init().")
         return self._es2
-

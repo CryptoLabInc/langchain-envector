@@ -12,7 +12,9 @@ from .vectorstore import Envector, Document
 
 
 class EnvectorRetriever:
-    def __init__(self, store: Envector, *, search_kwargs: Optional[Dict[str, Any]] = None) -> None:
+    def __init__(
+        self, store: Envector, *, search_kwargs: Optional[Dict[str, Any]] = None
+    ) -> None:
         self.store = store
         self.search_kwargs = search_kwargs or {}
 

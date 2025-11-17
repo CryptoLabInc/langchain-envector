@@ -36,6 +36,16 @@ Thumbs.db
 
 # Sensitive local data
 keys/
+VECTORSTORE.md
+
+# External symlinks (local workspace references)
+es2-msa
+es2-msa/
+es2-deploy
+es2-deploy/
+
+# Local helper scripts
+run_unit_tests.py
 
 # Jupyter
 .ipynb_checkpoints/
