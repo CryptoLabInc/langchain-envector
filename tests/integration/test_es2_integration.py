@@ -205,5 +205,8 @@ def test_e2e_vectorstore_plain_and_cipher():
         assert all("_id" in d.metadata for d in docs_cc)
 
     # Cleanup
+    store_plain.client.es2.init_connect(address=address)
     store_plain.client.es2.drop_index(cfg_plain.index.index_name)
+
+    store_cc.client.es2.init_connect(address=address)
     store_cc.client.es2.drop_index(cfg_cc.index.index_name)

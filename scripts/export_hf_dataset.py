@@ -36,6 +36,7 @@ def main():
     ap.add_argument("--size", type=int, default=1000)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--out", default="data/hf_export.jsonl")
+    ap.add_argument("--cache-dir", default=None, help="Optional HF datasets cache dir")
     args = ap.parse_args()
 
     try:
@@ -43,9 +44,14 @@ def main():
     except Exception as e:  # pragma: no cover - env dependent
         raise SystemExit(f"Install 'datasets' package to use this script: {e}")
 
-    ds = load_dataset(args.name, args.subset, split=args.split)
-    if args.size and args.size < len(ds):
-        ds = ds.shuffle(seed=args.seed).select(range(args.size))
+    ds = load_dataset(
+        args.name,
+        args.subset,
+        split=args.split,
+        cache_dir=args.cache_dir,
+        streaming=True,
+    )
+    ds = ds.shuffle(seed=args.seed).take(args.size)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

@@ -43,14 +43,25 @@ Key dataclasses live in `libs/envector/config.py`:
 
 ## Examples
 - Configuration
-
   ```python
   from langchain_envector.config import ConnectionConfig, EnvectorConfig, IndexSettings, KeyConfig
 
   cfg = EnvectorConfig(
-      connection=ConnectionConfig(address=ES2_ADDRESS, access_token=ES2_ACCESS_TOKEN),
-      key=KeyConfig(key_path=ES2_KEY_PATH, key_id=ES2_KEY_ID, preset="ip", eval_mode="rmp"),
-      index=IndexSettings(index_name=INDEX_NAME, dim=DIM),
+      connection=ConnectionConfig(
+        address=ES2_ADDRESS, 
+        access_token=ES2_ACCESS_TOKEN
+      ),
+      key=KeyConfig(
+        key_path=ES2_KEY_PATH, 
+        key_id=ES2_KEY_ID, 
+        preset="ip", 
+        eval_mode="rmp"
+      ),
+      index=IndexSettings(
+        index_name=INDEX_NAME, 
+        dim=vector_dim, 
+        query_encryption="cipher"
+      ),
       create_if_missing=True,
   )
   ```
@@ -61,8 +72,17 @@ Key dataclasses live in `libs/envector/config.py`:
   from langchain_core.documents import Document
   from langchain_envector.vectorstore import Envector
 
-  docs = [Document(page_content="chunk-1", metadata={"source": "doc.pdf", "page": 1, "chunk": 0})]
-
+  docs = [
+    Document(
+      page_content="chunk-1", 
+      metadata={"source": "paper.pdf", "page": 1, "chunk": 0}
+    ),
+    Document(
+      page_content="chunk-2", 
+      metadata={"source": "paper.pdf", "page": 1, "chunk": 1}
+    ),
+  ]
+  
   store = Envector(config=cfg, embeddings=emb)
   store.add_documents(docs)
   ```
@@ -83,6 +103,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - Connection issues: verify ES2 address and registered keys.
 - Embeddings mismatch: ensure embedding dimension equals `index.dim` when supplying vectors.
 - Unexpected raw strings: confirm inserts used the JSON envelope.
+- Key Issues: check key's metadata to sync with the registered key if facing any key issue.
 
 ## Testing Without ES2
 - Run unit tests offline (no ES2 or SDK required):
