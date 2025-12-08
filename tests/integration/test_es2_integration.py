@@ -29,11 +29,6 @@ def _require_env(name: str) -> str:
     reason="Set ENVECTOR_ADDRESS (e.g., 0.0.0.0:50050) to enable Envector integration tests",
 )
 def test_e2e_vectorstore_plain_and_cipher():
-    try:
-        import pyenvector  # type: ignore
-    except Exception as e:  # pragma: no cover - env-dependent
-        pytest.skip(f"pyenvector SDK not available: {e}")
-
     address = _require_env("ENVECTOR_ADDRESS")
     key_path = _require_env("ENVECTOR_KEY_PATH")
     key_id = _require_env("ENVECTOR_KEY_ID")
