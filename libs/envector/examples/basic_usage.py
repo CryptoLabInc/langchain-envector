@@ -1,7 +1,7 @@
 """Basic usage example for Envector VectorStore.
 
 Requirements:
-- `es2`
+- `pyenvector`
 - `langchain` (version providing VectorStore APIs)
 - An embeddings backend, e.g. sentence-transformers
 """

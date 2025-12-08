@@ -1,7 +1,7 @@
 """Ingest the synthetic 1K dataset into Envector.
 
 Requires:
-- ES2 server and keys.
+- EnVector server and keys.
 - Dataset at `data/synthetic_rag_1k.jsonl` (run scripts/make_synthetic_rag_dataset.py).
 
 Usage:

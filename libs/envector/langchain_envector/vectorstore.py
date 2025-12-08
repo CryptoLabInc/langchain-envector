@@ -38,10 +38,10 @@ VectorStore, Document = _try_import_langchain()
 
 
 class Envector(VectorStore):  # type: ignore[misc]
-    """LangChain-compatible VectorStore adaptor for Envector (ES2).
+    """LangChain-compatible VectorStore adaptor for Envector.
 
-    This class wraps the high-level `es2` SDK. It does not use low-level
-    gRPC stubs or `es2.api.Indexer` directly.
+    This class wraps the high-level `pyenvector` SDK. It does not use low-level
+    gRPC stubs or `pyenvector.api.Indexer` directly.
     """
 
     def __init__(
@@ -89,7 +89,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         # Prepare metadata JSON strings per item
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
 
-        # Insert using high-level ES2 Index
+        # Insert using high-level pyenvector Index
         result_ids = self.client.index.insert(data=vectors, metadata=packed)
 
         # Return ephemeral placeholders to satisfy VectorStore interface,
@@ -111,7 +111,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         results = self.client.index.search(
             query=embedding, top_k=top_k, output_fields=self.config.index.output_fields
         )
-        # ES2 Index.search returns a list for each query; we passed single query
+        # pyenvector Index.search returns a list for each query; we passed single query
         result = (
             results[0]
             if isinstance(results, list) and results and isinstance(results[0], list)
@@ -265,7 +265,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         extracting `page_content` and `metadata` from each Document.
 
         Notes:
-        - Manual `ids` are ignored (ES2 does not support user-provided IDs).
+        - Manual `ids` are ignored (EnVector does not support user-provided IDs).
         - When `embeddings` is not configured, you must supply `vectors`.
         - Returns ephemeral IDs as produced by the client insert.
         """

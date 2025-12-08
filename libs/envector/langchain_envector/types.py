@@ -29,9 +29,9 @@ class SearchResult:
 
 
 def pack_metadata(text: str, metadata: Optional[Dict[str, Any]] = None) -> str:
-    """Pack text and metadata into a single JSON string field accepted by ES2.
+    """Pack text and metadata into a single JSON string field accepted by pyenvector.
 
-    ES2 metadata API stores lists of strings; we store a single JSON blob per item.
+    pyenvector metadata API stores lists of strings; we store a single JSON blob per item.
     Item-level IDs are not persisted/addressable.
     """
     import json
@@ -46,7 +46,7 @@ def pack_metadata(text: str, metadata: Optional[Dict[str, Any]] = None) -> str:
 def unpack_metadata(raw: Any) -> Dict[str, Any]:
     """Return metadata as a dict regardless of the raw payload type.
 
-    Recent ES2 versions may return decrypted metadata as a Python dict instead
+    Recent pyenvector versions may return decrypted metadata as a Python dict instead
     of the JSON string we originally stored. We normalise the payload here so
     downstream code always works with a dictionary.
     """
@@ -79,7 +79,7 @@ def unpack_metadata(raw: Any) -> Dict[str, Any]:
             if isinstance(data, dict):
                 return data
         except Exception:
-            # Some ES2 responses return Python-literal strings (single quotes).
+            # Some pyenvector responses return Python-literal strings (single quotes).
             try:
                 import ast
 

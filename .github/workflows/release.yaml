@@ -192,7 +192,7 @@ jobs:
           MAX_ATTEMPTS=30
           SLEEP_SECONDS=10
 
-          echo "Attempting to install es2==${WHEEL_VERSION} from TestPyPI..."
+          echo "Attempting to install pyenvector==${WHEEL_VERSION} from TestPyPI..."
           ATTEMPTS=0
           while true; do
             ATTEMPTS=$((ATTEMPTS + 1))
