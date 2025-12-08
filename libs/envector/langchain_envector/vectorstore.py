@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from .config import EnvectorConfig
 from .client import EnvectorClient
 from .types import Embeddings, as_embeddings, pack_metadata, unpack_metadata
@@ -38,10 +38,10 @@ VectorStore, Document = _try_import_langchain()
 
 
 class Envector(VectorStore):  # type: ignore[misc]
-    """LangChain-compatible VectorStore adaptor for Envector (ES2).
+    """LangChain-compatible VectorStore adaptor for Envector.
 
-    This class wraps the high-level `es2` SDK. It does not use low-level
-    gRPC stubs or `es2.api.Indexer` directly.
+    This class wraps the high-level `pyenvector` SDK. It does not use low-level
+    gRPC stubs or `pyenvector.api.Indexer` directly.
     """
 
     def __init__(
@@ -89,47 +89,36 @@ class Envector(VectorStore):  # type: ignore[misc]
         # Prepare metadata JSON strings per item
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
 
-        # Insert using high-level ES2 Index
+        # Insert using high-level pyenvector Index
         result_ids = self.client.index.insert(data=vectors, metadata=packed)
 
         # Return ephemeral placeholders to satisfy VectorStore interface,
         # but they are NOT persisted/addressable.
         return result_ids
 
-    def similarity_search(
+    def _similarity_search_with_scores(
         self,
-        query: str,
-        k: int = 4,
         *,
+        embedding: List[float],
+        k: int,
         filter: Optional[Dict[str, Any]] = None,
         score_threshold: Optional[float] = None,
         fetch_k: Optional[int] = None,
         **kwargs: Any,
-    ) -> List[Document]:
-        """Search similar items for a text query.
-
-        - Embeds query if embeddings are provided; else expect `embedding` kwarg.
-        - Applies optional client-side filter and score threshold.
-        """
-        embedding: Optional[List[float]] = kwargs.get("embedding")
-        if embedding is None:
-            if self._embeddings is None:
-                raise ValueError("embeddings is None and no `embedding` provided")
-            embedding = self._embeddings.embed_query(query)
-
+    ) -> List[Tuple[Document, float]]:
         top_k = fetch_k or self.config.index.fetch_k or k
 
         results = self.client.index.search(
             query=embedding, top_k=top_k, output_fields=self.config.index.output_fields
         )
-        # ES2 Index.search returns a list for each query; we passed single query
+        # pyenvector Index.search returns a list for each query; we passed single query
         result = (
             results[0]
             if isinstance(results, list) and results and isinstance(results[0], list)
             else results
         )
 
-        docs = []
+        docs_with_scores: List[Tuple[Document, float]] = []
         # Iterate from top-1 to top-k
         for item in result:
             # item = {"id": ..., "score": float, "metadata": [str] or {...}}
@@ -158,10 +147,66 @@ class Envector(VectorStore):  # type: ignore[misc]
                 page_content=text,
                 metadata={**metadata, "_score": score, "_id": item.get("id")},
             )
-            docs.append(doc)
+            docs_with_scores.append((doc, score))
 
         # Trim to k after filtering
-        return docs[:k]
+        return docs_with_scores[:k]
+
+    def similarity_search(
+        self,
+        query: str,
+        k: int = 4,
+        *,
+        filter: Optional[Dict[str, Any]] = None,
+        score_threshold: Optional[float] = None,
+        fetch_k: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List[Document]:
+        """Search similar items for a text query.
+
+        - Embeds query if embeddings are provided; else expect `embedding` kwarg.
+        - Applies optional client-side filter and score threshold.
+        """
+        embedding: Optional[List[float]] = kwargs.pop("embedding", None)
+        if embedding is None:
+            if self._embeddings is None:
+                raise ValueError("embeddings is None and no `embedding` provided")
+            embedding = self._embeddings.embed_query(query)
+
+        docs_with_scores = self._similarity_search_with_scores(
+            embedding=embedding,
+            k=k,
+            filter=filter,
+            score_threshold=score_threshold,
+            fetch_k=fetch_k,
+            **kwargs,
+        )
+        return [doc for doc, _ in docs_with_scores]
+
+    def similarity_search_with_score(
+        self,
+        query: str,
+        k: int = 4,
+        *,
+        filter: Optional[Dict[str, Any]] = None,
+        score_threshold: Optional[float] = None,
+        fetch_k: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        embedding: Optional[List[float]] = kwargs.pop("embedding", None)
+        if embedding is None:
+            if self._embeddings is None:
+                raise ValueError("embeddings is None and no `embedding` provided")
+            embedding = self._embeddings.embed_query(query)
+
+        return self._similarity_search_with_scores(
+            embedding=embedding,
+            k=k,
+            filter=filter,
+            score_threshold=score_threshold,
+            fetch_k=fetch_k,
+            **kwargs,
+        )
 
     # Vector-based variant required by some VectorStore interfaces
     def similarity_search_by_vector(
@@ -174,13 +219,32 @@ class Envector(VectorStore):  # type: ignore[misc]
         fetch_k: Optional[int] = None,
         **kwargs: Any,
     ) -> List[Document]:
-        return self.similarity_search(
-            query="",  # unused
+        docs_with_scores = self._similarity_search_with_scores(
+            embedding=embedding,
             k=k,
             filter=filter,
             score_threshold=score_threshold,
             fetch_k=fetch_k,
+            **kwargs,
+        )
+        return [doc for doc, _ in docs_with_scores]
+
+    def similarity_search_with_score_by_vector(
+        self,
+        embedding: List[float],
+        k: int = 4,
+        *,
+        filter: Optional[Dict[str, Any]] = None,
+        score_threshold: Optional[float] = None,
+        fetch_k: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List[Tuple[Document, float]]:
+        return self._similarity_search_with_scores(
             embedding=embedding,
+            k=k,
+            filter=filter,
+            score_threshold=score_threshold,
+            fetch_k=fetch_k,
             **kwargs,
         )
 
@@ -201,7 +265,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         extracting `page_content` and `metadata` from each Document.
 
         Notes:
-        - Manual `ids` are ignored (ES2 does not support user-provided IDs).
+        - Manual `ids` are ignored (EnVector does not support user-provided IDs).
         - When `embeddings` is not configured, you must supply `vectors`.
         - Returns ephemeral IDs as produced by the client insert.
         """

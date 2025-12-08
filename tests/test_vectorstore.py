@@ -158,6 +158,58 @@ def test_similarity_search_by_vector_with_filter_and_threshold():
     assert docs[0].metadata["_score"] >= 0.5
 
 
+def test_similarity_search_with_score_returns_tuples():
+    index = FakeIndex()
+    index.search_payload = [
+        [
+            {
+                "id": "s-0",
+                "score": 0.77,
+                "metadata": '{"text": "Doc0", "metadata": {"tag": "x"}}',
+            },
+            {
+                "id": "s-1",
+                "score": 0.25,
+                "metadata": '{"text": "Doc1", "metadata": {"tag": "y"}}',
+            },
+        ]
+    ]
+    client = FakeClient(index)
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    results = store.similarity_search_with_score("query", k=2)
+    assert len(results) == 2
+    first_doc, first_score = results[0]
+    assert isinstance(first_doc, LC_Document)
+    assert first_doc.page_content == "Doc0"
+    assert first_doc.metadata["_score"] == first_score
+    assert first_doc.metadata["_id"] == "s-0"
+
+
+def test_similarity_search_with_score_by_vector_returns_tuples():
+    index = FakeIndex()
+    index.search_payload = [
+        [
+            {
+                "id": "sv-0",
+                "score": 0.66,
+                "metadata": '{"text": "VectorDoc", "metadata": {"tag": "keep"}}',
+            }
+        ]
+    ]
+    client = FakeClient(index)
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    results = store.similarity_search_with_score_by_vector(
+        [0.0, 0.0, 0.0, 0.0], k=1, filter={"tag": "keep"}, score_threshold=0.5
+    )
+    assert len(results) == 1
+    doc, score = results[0]
+    assert doc.page_content == "VectorDoc"
+    assert score == doc.metadata["_score"]
+    assert doc.metadata["_id"] == "sv-0"
+
+
 def test_from_texts_inserts_using_embeddings():
     client = FakeClient()
     store = Envector.from_texts(

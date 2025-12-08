@@ -25,35 +25,30 @@ def _require_env(name: str) -> str:
 
 
 @pytest.mark.skipif(
-    os.environ.get("ES2_ADDRESS") is None,
-    reason="Set ES2_ADDRESS (e.g., 0.0.0.0:50050) to enable ES2 integration tests",
+    os.environ.get("ENVECTOR_ADDRESS") is None,
+    reason="Set ENVECTOR_ADDRESS (e.g., 0.0.0.0:50050) to enable Envector integration tests",
 )
 def test_e2e_vectorstore_plain_and_cipher():
-    try:
-        import es2  # type: ignore
-    except Exception as e:  # pragma: no cover - env-dependent
-        pytest.skip(f"es2 SDK not available: {e}")
-
-    address = _require_env("ES2_ADDRESS")
-    key_path = _require_env("ES2_KEY_PATH")
-    key_id = _require_env("ES2_KEY_ID")
-    use_emb = os.environ.get("ES2_USE_EMBEDDINGS") in {"1", "true", "TRUE", "yes"}
+    address = _require_env("ENVECTOR_ADDRESS")
+    key_path = _require_env("ENVECTOR_KEY_PATH")
+    key_id = _require_env("ENVECTOR_KEY_ID")
+    use_emb = os.environ.get("ENVECTOR_USE_EMBEDDINGS") in {"1", "true", "TRUE", "yes"}
     model_name = os.environ.get(
-        "ES2_EMB_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
+        "ENVECTOR_EMB_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
     )
-    use_hf = os.environ.get("ES2_USE_HF_DATASET") in {"1", "true", "TRUE", "yes"}
-    hf_name = os.environ.get("ES2_HF_NAME", "ag_news")
-    hf_subset = os.environ.get("ES2_HF_SUBSET")
-    hf_split = os.environ.get("ES2_HF_SPLIT", "train")
-    hf_text_col = os.environ.get("ES2_HF_TEXT_COL", "text")
+    use_hf = os.environ.get("ENVECTOR_USE_HF_DATASET") in {"1", "true", "TRUE", "yes"}
+    hf_name = os.environ.get("ENVECTOR_HF_NAME", "ag_news")
+    hf_subset = os.environ.get("ENVECTOR_HF_SUBSET")
+    hf_split = os.environ.get("ENVECTOR_HF_SPLIT", "train")
+    hf_text_col = os.environ.get("ENVECTOR_HF_TEXT_COL", "text")
     hf_meta_cols = [
-        c for c in os.environ.get("ES2_HF_META_COLS", "label").split(",") if c
+        c for c in os.environ.get("ENVECTOR_HF_META_COLS", "label").split(",") if c
     ]
-    hf_size = int(os.environ.get("ES2_HF_SIZE", "200"))
-    hf_seed = int(os.environ.get("ES2_HF_SEED", "42"))
+    hf_size = int(os.environ.get("ENVECTOR_HF_SIZE", "200"))
+    hf_seed = int(os.environ.get("ENVECTOR_HF_SEED", "42"))
 
     # Determine dimension: either from env, or from embeddings model, or default
-    dim_env = os.environ.get("ES2_DIM")
+    dim_env = os.environ.get("ENVECTOR_DIM")
     if use_emb:
         emb = None
         # Prefer LangChain embeddings if available, else fall back to sentence-transformers
@@ -79,13 +74,13 @@ def test_e2e_vectorstore_plain_and_cipher():
         pytest.skip("Envector supports dimensions in [32, 4096]")
 
     base_index_name = os.environ.get(
-        "ES2_INDEX_NAME", f"inttest_{secrets.token_hex(4)}"
+        "ENVECTOR_INDEX_NAME", f"inttest_{secrets.token_hex(4)}"
     )
 
-    import es2
+    import pyenvector as ev
 
-    es2.init_connect(address=address)
-    es2.reset()
+    ev.init_connect(address=address)
+    ev.reset()
 
     # Plain query mode
     cfg_plain = EnvectorConfig(
@@ -205,5 +200,8 @@ def test_e2e_vectorstore_plain_and_cipher():
         assert all("_id" in d.metadata for d in docs_cc)
 
     # Cleanup
-    store_plain.client.es2.drop_index(cfg_plain.index.index_name)
-    store_cc.client.es2.drop_index(cfg_cc.index.index_name)
+    store_plain.client.ev.init_connect(address=address)
+    store_plain.client.ev.drop_index(cfg_plain.index.index_name)
+
+    store_cc.client.ev.init_connect(address=address)
+    store_cc.client.ev.drop_index(cfg_cc.index.index_name)

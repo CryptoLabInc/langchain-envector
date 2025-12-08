@@ -13,16 +13,16 @@ Thanks for your interest in improving the project! This guide covers local setup
 
 ## Testing
 - **Unit tests** (fakes only): `python run_unit_tests.py`
-- **Integration tests** (requires ES2 server + keys):
-  - Export `ES2_ADDRESS`, `ES2_KEY_PATH`, `ES2_KEY_ID`
-  - Optional: `ES2_USE_EMBEDDINGS=1`, `ES2_EMB_MODEL`, `ES2_USE_HF_DATASET=1`
+- **Integration tests** (requires EnVector server + keys):
+  - Export `ENVECTOR_ADDRESS`, `ENVECTOR_KEY_PATH`, `ENVECTOR_KEY_ID`
+  - Optional: `ENVECTOR_USE_EMBEDDINGS=1`, `ENVECTOR_EMB_MODEL`, `ENVECTOR_USE_HF_DATASET=1`
   - Run `pytest -m integration -s`
 
 Please run relevant tests before submitting a PR and mention coverage in the description.
 
 ## Development Guidelines
 - Keep code, comments, and docs in English.
-- Prefer the high-level `es2` SDK APIs; avoid direct gRPC/indexer calls unless required.
+- Prefer the high-level `pyenvector` SDK APIs; avoid direct gRPC/indexer calls unless required.
 - Keep changes focused and documented; update README or notebooks when behavior changes.
 - Follow existing formatting and type-hint conventions.
 

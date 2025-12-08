@@ -1,6 +1,6 @@
 # LangChain Envector Integration
 
-Encrypted vector search for LangChain using Envector (ES2), powered by homomorphic encryption (CKKS). This repo ships a LangChain-compatible VectorStore and retriever utilities built on the high-level `es2` Python SDK.
+Encrypted vector search for LangChain using Envector, powered by homomorphic encryption (CKKS). This repo ships a LangChain-compatible VectorStore and retriever utilities built on the high-level `pyenvector` Python SDK.
 
 ## Features
 - LangChain `VectorStore` interface with `similarity_search`, `from_texts`, etc.
@@ -13,10 +13,10 @@ Encrypted vector search for LangChain using Envector (ES2), powered by homomorph
   - `python3.11 -m venv .venv && source .venv/bin/activate`
 - Install runtime dependencies:
   - `pip install -U pip setuptools wheel`
-  - `pip install es2 langchain sentence-transformers`
+  - `pip install pyenvector langchain sentence-transformers`
 
 ## Usage Overview
-1. Configure Envector using `EnvectorConfig`, pointing to your ES2 endpoint and keys.
+1. Configure Envector using `EnvectorConfig`, pointing to your EnVector endpoint and keys.
 2. Initialize embeddings (or provide pre-computed vectors).
 3. Instantiate `Envector(config=cfg, embeddings=emb)` and call `add_texts`, `add_documents`, or use `as_retriever`.
 4. Run `similarity_search` or plug the retriever into your LangChain pipeline.
@@ -25,13 +25,13 @@ Encrypted vector search for LangChain using Envector (ES2), powered by homomorph
 
 ## Configuration
 Key dataclasses live in `libs/envector/config.py`:
-- `ConnectionConfig`: address or host/port for ES2.
+- `ConnectionConfig`: address or host/port for EnVector.
 - `KeyConfig`: key path, key ID, optional preset/eval mode.
 - `IndexSettings`: index name, dimension (32–4096), query encryption mode, optional output fields and fetch parameters.
 - `EnvectorConfig`: wraps the above and enables auto-creation via `create_if_missing`.
 
 ## Data Model
-- Each vector stores a single `metadata` string in ES2.
+- Each vector stores a single `metadata` string in EnVector.
 - To align with LangChain’s `Document`, inserts wrap data as JSON: `{"text": ..., "metadata": ...}`.
 - Retrieval unwraps JSON, returning `Document(page_content=text, metadata={...})`.
 - Client-side filtering requires the JSON envelope to include an object under `metadata`.
@@ -48,12 +48,12 @@ Key dataclasses live in `libs/envector/config.py`:
 
   cfg = EnvectorConfig(
       connection=ConnectionConfig(
-        address=ES2_ADDRESS, 
-        access_token=ES2_ACCESS_TOKEN
+        address=ENVECTOR_ADDRESS, 
+        access_token=ENVECTOR_ACCESS_TOKEN
       ),
       key=KeyConfig(
-        key_path=ES2_KEY_PATH, 
-        key_id=ES2_KEY_ID, 
+        key_path=ENVECTOR_KEY_PATH, 
+        key_id=ENVECTOR_KEY_ID, 
         preset="ip", 
         eval_mode="rmp"
       ),
@@ -87,19 +87,31 @@ Key dataclasses live in `libs/envector/config.py`:
   store.add_documents(docs)
   ```
 
+  The method `add_texts` is also available to store texts.
+
+- Similarity search
+
+  ```python
+  results = store.similarity_search_with_score(query, k=3)
+  for doc, score in results:
+      print(f"* [SIM={score:3f}] {doc.page_content} [{doc.metadata}]")
+  ```
+
+  The methods `similarity_search` and `similarity_search_with_vector` (with `embeddings.embed_query()`) are also available to perform vector search.
+
 ## Troubleshooting
-- Connection issues: verify ES2 address and registered keys.
+- Connection issues: verify EnVector address and registered keys.
 - Embeddings mismatch: ensure embedding dimension equals `index.dim` when supplying vectors.
 - Unexpected raw strings: confirm inserts used the JSON envelope.
 - Key Issues: check key's metadata to sync with the registered key if facing any key issue.
 
-## Testing Without ES2
-- Run unit tests offline (no ES2 or SDK required):
+## Testing Without EnVector
+- Run unit tests offline (no EnVector or SDK required):
   - `python -m pytest -q -m "not integration"`
   - or `python scripts/run_unit_tests.py`
 - Run integration tests (requires server and keys):
-  - Export `ES2_ADDRESS`, `ES2_KEY_PATH`, `ES2_KEY_ID`
-  - Optional: `ES2_USE_EMBEDDINGS=1`, `ES2_EMB_MODEL`, `ES2_USE_HF_DATASET=1`
+  - Export `ENVECTOR_ADDRESS`, `ENVECTOR_KEY_PATH`, `ENVECTOR_KEY_ID`
+  - Optional: `ENVECTOR_USE_EMBEDDINGS=1`, `ENVECTOR_EMB_MODEL`, `ENVECTOR_USE_HF_DATASET=1`
   - `python -m pytest -q -m integration -s`
 
 ## Contributing
