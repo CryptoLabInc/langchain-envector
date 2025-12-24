@@ -19,9 +19,7 @@ sentence-transformers
 # PyTorch; required by sentence-transformers (CPU wheels will be resolved per platform)
 torch
 
-langchain
-langchain-tests
-
 # LangChain core and test utilities (local installs from repo root)
+langchain
 langchain-core
 langchain-tests
