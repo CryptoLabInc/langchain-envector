@@ -110,7 +110,7 @@ Key dataclasses live in `libs/envector/config.py`:
   - `python -m pytest -q -m "not integration"`
   - or `python scripts/run_unit_tests.py`
 - Run integration tests (requires server and keys):
-  - Export `ENVECTOR_ADDRESS`, `ENVECTOR_KEY_PATH`, `ENVECTOR_KEY_ID`
+  - Export environment variables: `ENVECTOR_ADDRESS`, `ENVECTOR_KEY_PATH`, `ENVECTOR_KEY_ID`
   - Optional: `ENVECTOR_USE_EMBEDDINGS=1`, `ENVECTOR_EMB_MODEL`, `ENVECTOR_USE_HF_DATASET=1`
   - `python -m pytest -q -m integration -s`
 
