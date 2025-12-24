@@ -259,6 +259,20 @@ def test_add_documents_with_embeddings():
     assert any('"text": "C2"' in m for m in packed)
 
 
+def test_add_documents_ignores_ids_and_returns_item_ids():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    docs = [
+        LC_Document(page_content="D1", metadata={"t": 1}),
+        LC_Document(page_content="D2", metadata={"t": 2}),
+    ]
+    ret_ids = store.add_documents(docs, ids=["user-1", "user-2"])
+
+    assert len(ret_ids) == 2
+    assert ret_ids == [2, 3]
+
+
 def test_add_documents_requires_vectors_when_no_embeddings():
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=None, client=client)
