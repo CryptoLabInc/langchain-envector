@@ -2,6 +2,7 @@
 
 # Test runner
 pytest
+pytest-asyncio
 
 # pyenvector SDK — install from local wheel at repo root
 # Use a direct wheel path (no PEP 508 direct reference) for maximum pip compatibility.

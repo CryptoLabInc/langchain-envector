@@ -136,7 +136,7 @@ def test_e2e_vectorstore_plain_and_cipher():
                 (d.page_content[:80] + ("..." if len(d.page_content) > 80 else "")),
             )
         assert len(docs) >= 1
-        assert all("_id" in d.metadata for d in docs)
+        assert all(getattr(d, "id", None) or "_id" in d.metadata for d in docs)
         # optional filter check if 'label' is part of meta
         if not use_hf:
             docs_f = store_plain.similarity_search(
@@ -153,7 +153,7 @@ def test_e2e_vectorstore_plain_and_cipher():
             "[plain] results (explicit embedding e1):", [d.page_content for d in docs]
         )
         assert any(d.page_content == texts[0] for d in docs)
-        assert all("_id" in d.metadata for d in docs)
+        assert all(getattr(d, "id", None) or "_id" in d.metadata for d in docs)
         docs_f = store_plain.similarity_search(
             "q", k=2, embedding=e2, filter={"label": "B"}
         )
@@ -189,7 +189,7 @@ def test_e2e_vectorstore_plain_and_cipher():
                 (d.page_content[:80] + ("..." if len(d.page_content) > 80 else "")),
             )
         assert len(docs_cc) >= 1
-        assert all("_id" in d.metadata for d in docs_cc)
+        assert all(getattr(d, "id", None) or "_id" in d.metadata for d in docs_cc)
     else:
         docs_cc = store_cc.similarity_search("q", k=2, embedding=e2)
         print(
@@ -197,7 +197,7 @@ def test_e2e_vectorstore_plain_and_cipher():
             [d.page_content for d in docs_cc],
         )
         assert any(d.page_content == texts[1] for d in docs_cc)
-        assert all("_id" in d.metadata for d in docs_cc)
+        assert all(getattr(d, "id", None) or "_id" in d.metadata for d in docs_cc)
 
     # Cleanup
     store_plain.client.ev.init_connect(address=address)
