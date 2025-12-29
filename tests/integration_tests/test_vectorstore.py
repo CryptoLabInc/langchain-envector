@@ -8,7 +8,6 @@ import pytest
 from langchain_core.embeddings import DeterministicFakeEmbedding
 from langchain_core.vectorstores import VectorStore
 
-# pytest.importorskip("langchain_tests")
 from langchain_tests.integration_tests import VectorStoreIntegrationTests
 
 from langchain_envector.config import (
@@ -39,14 +38,17 @@ class TestEnvectorVectorStore(VectorStoreIntegrationTests):
 
     @property
     def has_async(self) -> bool:
+        # Envector does not yet support async methods.
         return False
 
     @property
     def has_get_by_ids(self) -> bool:
+        # Envector does not yet support get by IDs.
         return False
 
     @pytest.fixture()
     def vectorstore(self) -> Generator[VectorStore, None, None]:  # type: ignore[override]
+        # Set up Envector vector store for testing.
         address = _require_env("ENVECTOR_ADDRESS")
         key_path = _require_env("ENVECTOR_KEY_PATH")
         key_id = _require_env("ENVECTOR_KEY_ID")
@@ -60,12 +62,14 @@ class TestEnvectorVectorStore(VectorStoreIntegrationTests):
             ),
             create_if_missing=True,
         )
+        # Create the vector store.
         store = Envector(config=cfg, embeddings=self.get_embeddings())
 
         try:
             yield store
         finally:
             try:
+                # Clean up: delete the created index.
                 store.client.ev.delete_index(index_name)
             except Exception:
                 pass

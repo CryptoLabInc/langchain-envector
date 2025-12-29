@@ -19,13 +19,15 @@ def _cfg() -> EnvectorConfig:
     )
 
 
-def test_add_texts_ignores_ids_and_returns_item_ids():
+def test_add_texts_returns_item_ids():
+    # Test that add_texts returns the item IDs assigned by the vector store
+    # Note that user-provided IDs are ignored
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
     ret_ids = store.add_texts(
         ["t1", "t2"], metadatas=[{"m": 1}, {"m": 2}], ids=["a", "b"]
-    )  # ids ignored
+    )  # input ids ignored
 
     # Returned IDs
     assert len(ret_ids) == 2
@@ -259,7 +261,9 @@ def test_add_documents_with_embeddings():
     assert any('"text": "C2"' in m for m in packed)
 
 
-def test_add_documents_ignores_ids_and_returns_item_ids():
+def test_add_documents_returns_item_ids():
+    # Test that add_documents returns the item IDs assigned by the vector store
+    # Note that user-provided IDs are ignored
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
