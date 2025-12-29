@@ -8,7 +8,7 @@ import pytest
 from langchain_core.embeddings import DeterministicFakeEmbedding
 from langchain_core.vectorstores import VectorStore
 
-pytest.importorskip("langchain_tests")
+# pytest.importorskip("langchain_tests")
 from langchain_tests.integration_tests import VectorStoreIntegrationTests
 
 from langchain_envector.config import (
