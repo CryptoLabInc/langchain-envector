@@ -18,6 +18,7 @@ authors = [
 dependencies = [
   "pyenvector",
   "langchain>=0.2.0",
+  "langchain-core>=1.2.5,<2.0",
 ]
 keywords = ["langchain", "vectorstore", "homomorphic-encryption", "ckks", "encrypted-search", "envector", "pyenvector"]
 classifiers = [
