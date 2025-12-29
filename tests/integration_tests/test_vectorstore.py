@@ -30,6 +30,8 @@ def _require_env(name: str) -> str:
 
 
 class TestEnvectorVectorStore(VectorStoreIntegrationTests):
+    # VectorStoreIntegrationTests provides the standard search/add/get scenarios;
+    # this class only wires up the Envector fixture and capability flags.
     @staticmethod
     def get_embeddings() -> DeterministicFakeEmbedding:
         # Envector requires dimension in [32, 4096].
