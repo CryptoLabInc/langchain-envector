@@ -65,7 +65,6 @@ def test_similarity_search_with_filter_and_threshold():
     )
     assert len(docs) == 1
     assert docs[0].page_content == "A"
-    # assert docs[0].metadata["_score"] >= 0.5
 
 
 def test_similarity_search_handles_string_metadata():
@@ -108,7 +107,6 @@ def test_similarity_search_uses_raw_text_when_not_json():
     assert len(docs) == 1
     assert docs[0].page_content == "Plain text content without JSON"
     # user metadata should be empty dict when not provided
-    # assert all(k in docs[0].metadata for k in ["_score"])  # only system fields present
 
 
 def test_similarity_search_handles_python_literal_metadata():
