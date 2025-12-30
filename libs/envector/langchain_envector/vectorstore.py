@@ -155,7 +155,7 @@ class Envector(VectorStore):  # type: ignore[misc]
             doc_id = item.get("id")
             doc = Document(
                 page_content=text,
-                metadata={**metadata, "_score": score},
+                metadata={**metadata, "_score": score, "_id": item.get("id")},
                 id=doc_id,
             )
             docs_with_scores.append((doc, score))
@@ -195,7 +195,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         return [
             Document(
                 page_content=doc.page_content,
-                metadata=dict(getattr(doc, "metadata", {}) or {}),
+                metadata=dict({k: v for k, v in doc.metadata.items() if k not in ("_score", "_id")}),
                 id=getattr(doc, "id", None),
             )
             for doc, _ in docs_with_scores
