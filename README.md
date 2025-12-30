@@ -42,8 +42,9 @@ Key dataclasses live in `libs/envector/config.py`:
 - Filtering happens client-side; ensure metadata is JSON for structured filters.
 
 ## Examples
-- Configuration
-  ```python
+### Configuration
+
+```python
   from langchain_envector.config import ConnectionConfig, EnvectorConfig, IndexSettings, KeyConfig
 
   cfg = EnvectorConfig(
@@ -66,38 +67,63 @@ Key dataclasses live in `libs/envector/config.py`:
   )
   ```
 
-- Add documents (from LangChain Documents):
+### Add documents (from LangChain Documents):
 
-  ```python
-  from langchain_core.documents import Document
-  from langchain_envector.vectorstore import Envector
+```python
+from langchain_core.documents import Document
+from langchain_envector.vectorstore import Envector
 
-  docs = [
-    Document(
-      page_content="chunk-1", 
-      metadata={"source": "paper.pdf", "page": 1, "chunk": 0}
-    ),
-    Document(
-      page_content="chunk-2", 
-      metadata={"source": "paper.pdf", "page": 1, "chunk": 1}
-    ),
-  ]
-  
-  store = Envector(config=cfg, embeddings=emb)
-  store.add_documents(docs)
-  ```
+docs = [
+  Document(
+    page_content="chunk-1", 
+    metadata={"source": "paper.pdf", "page": 1, "chunk": 0}
+  ),
+  Document(
+    page_content="chunk-2", 
+    metadata={"source": "paper.pdf", "page": 1, "chunk": 1}
+  ),
+]
 
-  The method `add_texts` is also available to store texts.
+store = Envector(config=cfg, embeddings=emb)
+store.add_documents(docs)
+```
 
-- Similarity search
+Or you can use `add_texts` to store vectors and their texts.
 
-  ```python
-  results = store.similarity_search_with_score(query, k=3)
-  for doc, score in results:
-      print(f"* [SIM={score:.3f}] {doc.page_content} [{doc.metadata}]")
-  ```
+```python
+store.add_texts(
+    texts=["chunk 4"],
+    metadatas=[{"source": "paper.pdf", "page": 1, "chunk": 4}]
+)
+```
 
-  The methods `similarity_search` and `similarity_search_with_vector` (with `embeddings.embed_query()`) are also available to perform vector search.
+### Similarity search
+
+```python
+results = store.similarity_search(query, k=1)
+for doc in results:
+    print(f"* {doc.page_content} [{doc.metadata}]")
+```
+
+#### Similarity Search with Score
+
+```python
+results = store.similarity_search_with_score(query, k=1)
+for doc, score in results:
+    print(f"* [SIM={score:.3f}] {doc.page_content} [{doc.metadata}]")
+```
+
+
+#### Similarity Search with Vector
+
+```python
+query_embedding = embeddings.embed_query(query)
+print(f"Query: {query_embedding[:3]}")
+results = store.similarity_search_by_vector(query_embedding, k=3)
+for doc in results:
+    print(f"* [SIM={score:3f}] {doc.page_content} [{doc.metadata}]")
+```
+
 
 ## Troubleshooting
 - Connection issues: verify EnVector address and registered keys.
