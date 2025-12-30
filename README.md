@@ -94,7 +94,7 @@ Key dataclasses live in `libs/envector/config.py`:
   ```python
   results = store.similarity_search_with_score(query, k=3)
   for doc, score in results:
-      print(f"* [SIM={score:3f}] {doc.page_content} [{doc.metadata}]")
+      print(f"* [SIM={score:.3f}] {doc.page_content} [{doc.metadata}]")
   ```
 
   The methods `similarity_search` and `similarity_search_with_vector` (with `embeddings.embed_query()`) are also available to perform vector search.
