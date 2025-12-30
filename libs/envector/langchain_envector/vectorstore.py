@@ -195,7 +195,13 @@ class Envector(VectorStore):  # type: ignore[misc]
         return [
             Document(
                 page_content=doc.page_content,
-                metadata=dict({k: v for k, v in doc.metadata.items() if k not in ("_score", "_id")}),
+                metadata=dict(
+                    {
+                        k: v
+                        for k, v in doc.metadata.items()
+                        if k not in ("_score", "_id")
+                    }
+                ),
                 id=getattr(doc, "id", None),
             )
             for doc, _ in docs_with_scores
