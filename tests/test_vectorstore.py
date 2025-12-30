@@ -183,7 +183,6 @@ def test_similarity_search_with_score_returns_tuples():
     assert isinstance(first_doc, LC_Document)
     assert first_doc.page_content == "Doc0"
     assert first_doc.metadata["_score"] == first_score
-    # assert first_doc.metadata["_id"] == "s-0"
 
 
 def test_similarity_search_with_score_by_vector_returns_tuples():
@@ -207,7 +206,6 @@ def test_similarity_search_with_score_by_vector_returns_tuples():
     doc, score = results[0]
     assert doc.page_content == "VectorDoc"
     assert score == doc.metadata["_score"]
-    # assert doc.metadata["_id"] == "sv-0"
 
 
 def test_from_texts_inserts_using_embeddings():
