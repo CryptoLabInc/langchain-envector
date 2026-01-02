@@ -27,6 +27,7 @@ jobs:
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install -e .
           python -m pip install pytest pre-commit
+          python -m pip install langchain-tests
 
       - name: Lint and format
         run: pre-commit run --all-files --show-diff-on-failure

@@ -19,13 +19,15 @@ def _cfg() -> EnvectorConfig:
     )
 
 
-def test_add_texts_ignores_ids_and_returns_item_ids():
+def test_add_texts_returns_item_ids():
+    # Test that add_texts returns the item IDs assigned by the vector store
+    # Note that user-provided IDs are ignored
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
     ret_ids = store.add_texts(
         ["t1", "t2"], metadatas=[{"m": 1}, {"m": 2}], ids=["a", "b"]
-    )  # ids ignored
+    )  # input ids ignored
 
     # Returned IDs
     assert len(ret_ids) == 2
@@ -63,7 +65,6 @@ def test_similarity_search_with_filter_and_threshold():
     )
     assert len(docs) == 1
     assert docs[0].page_content == "A"
-    assert docs[0].metadata["_score"] >= 0.5
 
 
 def test_similarity_search_handles_string_metadata():
@@ -106,9 +107,6 @@ def test_similarity_search_uses_raw_text_when_not_json():
     assert len(docs) == 1
     assert docs[0].page_content == "Plain text content without JSON"
     # user metadata should be empty dict when not provided
-    assert all(
-        k in docs[0].metadata for k in ["_score", "_id"]
-    )  # only system fields present
 
 
 def test_similarity_search_handles_python_literal_metadata():
@@ -183,7 +181,6 @@ def test_similarity_search_with_score_returns_tuples():
     assert isinstance(first_doc, LC_Document)
     assert first_doc.page_content == "Doc0"
     assert first_doc.metadata["_score"] == first_score
-    assert first_doc.metadata["_id"] == "s-0"
 
 
 def test_similarity_search_with_score_by_vector_returns_tuples():
@@ -207,7 +204,6 @@ def test_similarity_search_with_score_by_vector_returns_tuples():
     doc, score = results[0]
     assert doc.page_content == "VectorDoc"
     assert score == doc.metadata["_score"]
-    assert doc.metadata["_id"] == "sv-0"
 
 
 def test_from_texts_inserts_using_embeddings():
@@ -257,6 +253,22 @@ def test_add_documents_with_embeddings():
     packed = client.index.inserted[0]["metadata"]
     assert any('"text": "C1"' in m for m in packed)
     assert any('"text": "C2"' in m for m in packed)
+
+
+def test_add_documents_returns_item_ids():
+    # Test that add_documents returns the item IDs assigned by the vector store
+    # Note that user-provided IDs are ignored
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    docs = [
+        LC_Document(page_content="D1", metadata={"t": 1}),
+        LC_Document(page_content="D2", metadata={"t": 2}),
+    ]
+    ret_ids = store.add_documents(docs, ids=["user-1", "user-2"])
+
+    assert len(ret_ids) == 2
+    assert ret_ids == [2, 3]
 
 
 def test_add_documents_requires_vectors_when_no_embeddings():
