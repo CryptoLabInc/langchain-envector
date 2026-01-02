@@ -92,8 +92,8 @@ Or you can use `add_texts` to store vectors and their texts.
 
 ```python
 store.add_texts(
-    texts=["chunk 4"],
-    metadatas=[{"source": "paper.pdf", "page": 1, "chunk": 4}]
+    texts=["chunk 3"],
+    metadatas=[{"source": "paper.pdf", "page": 1, "chunk": 2}]
 )
 ```
 
@@ -131,14 +131,45 @@ for doc in results:
 - Unexpected raw strings: confirm inserts used the JSON envelope.
 - Key Issues: check key's metadata to sync with the registered key if facing any key issue.
 
-## Testing Without EnVector
-- Run unit tests offline (no EnVector or SDK required):
-  - `python -m pytest -q -m "not integration"`
-  - or `python scripts/run_unit_tests.py`
-- Run integration tests (requires server and keys):
-  - Export environment variables: `ENVECTOR_ADDRESS`, `ENVECTOR_KEY_PATH`, `ENVECTOR_KEY_ID`, and `ENVECTOR_INDEX_NAME`.
-  - Optional: `ENVECTOR_USE_EMBEDDINGS=1`, `ENVECTOR_EMB_MODEL`, `ENVECTOR_USE_HF_DATASET=1`
-  - `python -m pytest -q -m integration -s`
+## Test
+
+Before running tests, install dependencies for pytest:
+
+```bash
+pip install -r tests/requirements.txt
+```
+
+### Unit Test
+
+Run unit tests offline (no EnVector or SDK required)
+
+```bash
+python -m pytest -q -m "not integration"
+# or
+python scripts/run_unit_tests.py
+```
+
+### Integration Test
+
+Run integration tests (requires enVector server)
+
+1. Prepare the running enVector server
+
+2. Export the environment variables:
+
+  - `ENVECTOR_ADDRESS`
+  - `ENVECTOR_KEY_PATH`
+  - `ENVECTOR_KEY_ID`
+  - `ENVECTOR_INDEX_NAME`
+  - (Optional) `ENVECTOR_USE_EMBEDDINGS=1`
+  - (Optional) `ENVECTOR_EMB_MODEL`
+  - (Optional) `ENVECTOR_USE_HF_DATASET=1`
+
+3. Run the following command:
+  
+```bash
+python -m pytest -q -m integration -s
+```
 
 ## Contributing
 See [`CONTRIBUTE.md`](CONTRIBUTE.md) for development, testing, and PR guidelines.
