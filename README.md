@@ -37,8 +37,9 @@ Key dataclasses live in `libs/envector/config.py`:
 - Client-side filtering requires the JSON envelope to include an object under `metadata`.
 
 ## Limitations
-- Item-level delete/update is unsupported (drop the index to reset).
-- Manual item IDs are not accepted; returned IDs from `add_texts` are ephemeral.
+- Item-level updates are unsupported (re-insert to update; drop the index to reset).
+- Manual item IDs are not accepted; use the `item_id` values returned by `add_texts` / `add_documents` for subsequent `delete` calls.
+- Fetch-by-ID (`get_by_ids`) is unsupported.
 - Filtering happens client-side; ensure metadata is JSON for structured filters.
 
 ## Examples
@@ -55,8 +56,8 @@ Key dataclasses live in `libs/envector/config.py`:
       key=KeyConfig(
         key_path=ENVECTOR_KEY_PATH, 
         key_id=ENVECTOR_KEY_ID, 
-        preset="ip", 
-        eval_mode="rmp"
+        preset="ip2", 
+        eval_mode="mm32"
       ),
       index=IndexSettings(
         index_name=INDEX_NAME, 
@@ -112,7 +113,6 @@ results = store.similarity_search_with_score(query, k=1)
 for doc, score in results:
     print(f"* [SIM={score:.3f}] {doc.page_content} [{doc.metadata}]")
 ```
-
 
 #### Similarity Search with Vector
 

@@ -85,7 +85,7 @@ def test_e2e_vectorstore_plain_and_cipher():
     # Plain query mode
     cfg_plain = EnvectorConfig(
         connection=ConnectionConfig(address=address),
-        key=KeyConfig(key_path=key_path, key_id=key_id, preset="ip", eval_mode="rmp"),
+        key=KeyConfig(key_path=key_path, key_id=key_id, preset="ip2", eval_mode="mm32"),
         index=IndexSettings(
             index_name=f"{base_index_name}_plain", dim=dim, query_encryption="plain"
         ),
@@ -164,7 +164,7 @@ def test_e2e_vectorstore_plain_and_cipher():
     # Cipher query mode
     cfg_cc = EnvectorConfig(
         connection=ConnectionConfig(address=address),
-        key=KeyConfig(key_path=key_path, key_id=key_id, preset="ip", eval_mode="rmp"),
+        key=KeyConfig(key_path=key_path, key_id=key_id, preset="ip2", eval_mode="mm32"),
         index=IndexSettings(
             index_name=f"{base_index_name}_cipher", dim=dim, query_encryption="cipher"
         ),
