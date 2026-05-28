@@ -20,11 +20,29 @@ class FakeEmbeddings:
 @dataclass
 class FakeIndex:
     inserted: List[Dict[str, Any]] = field(default_factory=list)
+    deleted: List[Dict[str, Any]] = field(default_factory=list)
     search_payload: Optional[List[List[Dict[str, Any]]]] = None
 
     def insert(self, data: List[List[float]], metadata: List[str]):
         self.inserted.append({"data": data, "metadata": metadata})
         return [len(self.inserted) + i + 1 for i in range(len(metadata))]
+
+    def delete(
+        self,
+        item_ids: List[int],
+        await_completion: bool = True,
+        timeout_s: float = 600.0,
+        poll_interval_s: float = 1.0,
+    ) -> str:
+        self.deleted.append(
+            {
+                "item_ids": list(item_ids),
+                "await_completion": await_completion,
+                "timeout_s": timeout_s,
+                "poll_interval_s": poll_interval_s,
+            }
+        )
+        return f"req-del-{len(self.deleted)}"
 
     def search(self, query: List[float], top_k: int, output_fields: List[str]):
         if self.search_payload is not None:

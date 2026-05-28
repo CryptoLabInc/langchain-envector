@@ -284,6 +284,59 @@ def test_add_documents_requires_vectors_when_no_embeddings():
         assert "embeddings is None and vectors not provided" in str(e)
 
 
+def test_delete_passes_item_ids_to_sdk():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["t1", "t2", "t3"])
+    assert ids == [2, 3, 4]
+
+    assert store.delete(ids=[ids[0], ids[2]]) is True
+    assert len(client.index.deleted) == 1
+    call = client.index.deleted[0]
+    assert call["item_ids"] == [2, 4]
+    assert call["await_completion"] is False
+
+
+def test_delete_accepts_string_ids():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["a", "b"])
+
+    assert store.delete(ids=[str(ids[0])]) is True
+    assert client.index.deleted[0]["item_ids"] == [ids[0]]
+
+
+def test_delete_empty_or_none_returns_false():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    assert store.delete(ids=None) is False
+    assert store.delete(ids=[]) is False
+    assert client.index.deleted == []
+
+
+def test_delete_rejects_non_numeric_ids():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    try:
+        store.delete(ids=["abc"])
+        assert False, "Expected ValueError for non-numeric ids"
+    except ValueError as e:
+        assert "integer item IDs" in str(e)
+
+
+def test_delete_forwards_await_kwargs():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["x"])
+
+    store.delete(ids=ids, await_completion=False, timeout_s=12.0, poll_interval_s=0.5)
+    call = client.index.deleted[0]
+    assert call["await_completion"] is False
+    assert call["timeout_s"] == 12.0
+    assert call["poll_interval_s"] == 0.5
+
+
 def test_add_documents_with_explicit_vectors():
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=None, client=client)

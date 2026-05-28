@@ -96,6 +96,39 @@ class Envector(VectorStore):  # type: ignore[misc]
         # but they are NOT persisted/addressable.
         return result_ids
 
+    def delete(
+        self,
+        ids: Optional[List[Any]] = None,
+        *,
+        await_completion: bool = False,
+        timeout_s: float = 600.0,
+        poll_interval_s: float = 1.0,
+        **kwargs: Any,
+    ) -> Optional[bool]:
+        """Delete items from the encrypted index by item ID.
+
+        Accepts the ``item_id`` values returned from ``add_texts`` /
+        ``add_documents``. Both ``int`` and ``str`` (numeric) IDs are accepted
+        and coerced to ``int`` before being passed to the SDK.
+        """
+        if not ids:
+            return False
+        try:
+            item_ids = [int(x) for x in ids]
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                "Envector.delete expects integer item IDs (or numeric strings) "
+                "as returned by add_texts/add_documents."
+            ) from e
+
+        self.client.index.delete(
+            item_ids=item_ids,
+            await_completion=await_completion,
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
+        )
+        return True
+
     def _similarity_search_with_scores(
         self,
         *,

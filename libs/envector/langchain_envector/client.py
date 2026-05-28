@@ -28,18 +28,15 @@ class EnvectorClient:
 
         # Connection
         if c.address:
-            ev_client.init_connect(address=c.address, access_token=c.access_token)
+            ev_client.init_connect(
+                address=c.address, access_token=c.access_token, secure=c.secure
+            )
         else:
             if not (c.host and c.port):
                 raise ValueError("Either address or host+port must be provided.")
             ev_client.init_connect(
-                host=c.host, port=c.port, access_token=c.access_token
+                host=c.host, port=c.port, access_token=c.access_token, secure=c.secure
             )
-
-        # Key path baseline for Index
-        from pyenvector.index import Index as _Index
-
-        _Index.init_key_path(k.key_path)
 
         # Index config + key setup
         ev_client.init_index_config(
@@ -55,13 +52,17 @@ class EnvectorClient:
             index_encryption="cipher",  # server vectors are always encrypted
             index_type=i.index_type,
             auto_key_setup=True,
+            description=i.description,
+            metadata_encryption=i.metadata_encryption,
         )
 
         # Create index if missing
         if self.config.create_if_missing:
             idx_list = ev_client.get_index_list()
             if i.index_name not in idx_list:
-                ev_client.create_index(index_name=i.index_name, dim=i.dim)
+                ev_client.create_index(
+                    index_name=i.index_name, dim=i.dim, index_params=i.index_params
+                )
 
         # Bind index instance
         self._index = ev.Index(i.index_name)
