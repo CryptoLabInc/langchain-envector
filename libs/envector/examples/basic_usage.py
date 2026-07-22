@@ -22,7 +22,7 @@ def main():
     cfg = EnvectorConfig(
         connection=ConnectionConfig(address="localhost:50050"),
         key=KeyConfig(
-            key_path="./keys", key_id="example_key", preset="ip2", eval_mode="mm32"
+            key_path="./keys", key_id="example_key", preset="ip3", eval_mode="mms32"
         ),
         index=IndexSettings(index_name="demo", dim=384, query_encryption="plain"),
         create_if_missing=True,

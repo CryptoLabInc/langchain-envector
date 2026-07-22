@@ -63,7 +63,7 @@ def main():
     cfg = EnvectorConfig(
         connection=ConnectionConfig(address=args.address),
         key=KeyConfig(
-            key_path=args.key_path, key_id=args.key_id, preset="ip2", eval_mode="mm32"
+            key_path=args.key_path, key_id=args.key_id, preset="ip3", eval_mode="mms32"
         ),
         index=IndexSettings(
             index_name=args.index_name,

@@ -56,8 +56,8 @@ Key dataclasses live in `libs/envector/config.py`:
       key=KeyConfig(
         key_path=ENVECTOR_KEY_PATH, 
         key_id=ENVECTOR_KEY_ID, 
-        preset="ip2", 
-        eval_mode="mm32"
+        preset="ip3", 
+        eval_mode="mms32"
       ),
       index=IndexSettings(
         index_name=INDEX_NAME, 
