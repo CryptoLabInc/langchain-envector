@@ -25,7 +25,7 @@ Encrypted vector search for LangChain using Envector, powered by homomorphic enc
 
 ## Configuration
 Key dataclasses live in `libs/envector/config.py`:
-- `ConnectionConfig`: address or host/port for EnVector.
+- `ConnectionConfig`: address or host/port for EnVector; optional `kms_address` / `kms_secure` / `kms_ca_cert` for the enVector KMS service (pyenvector >= 1.5.0).
 - `KeyConfig`: key path, key ID, optional preset/eval mode.
 - `IndexSettings`: index name, dimension (32–4096), query encryption mode, optional output fields and fetch parameters.
 - `EnvectorConfig`: wraps the above and enables auto-creation via `create_if_missing`.
@@ -37,8 +37,8 @@ Key dataclasses live in `libs/envector/config.py`:
 - Client-side filtering requires the JSON envelope to include an object under `metadata`.
 
 ## Limitations
-- Item-level updates are unsupported (re-insert to update; drop the index to reset).
-- Manual item IDs are not accepted; use the `item_id` values returned by `add_texts` / `add_documents` for subsequent `delete` calls.
+- Vector updates are unsupported (delete and re-insert to change a vector). Stored text/metadata can be replaced with `update_metadata` / `update_documents`.
+- Manual item IDs are not accepted; use the `item_id` values returned by `add_texts` / `add_documents` for subsequent `delete` / `update_metadata` calls.
 - Fetch-by-ID (`get_by_ids`) is unsupported.
 - Filtering happens client-side; ensure metadata is JSON for structured filters.
 
@@ -123,6 +123,34 @@ results = store.similarity_search_by_vector(query_embedding, k=3)
 for doc in results:
     print(f"* [SIM={score:3f}] {doc.page_content} [{doc.metadata}]")
 ```
+
+### Update stored text/metadata
+
+Stored content is replaced wholesale by item ID (vectors are untouched):
+
+```python
+ids = store.add_texts(["draft"], metadatas=[{"status": "draft"}])
+result = store.update_metadata(ids, ["final"], metadatas=[{"status": "final"}])
+print(result)  # {"updated": [...], "skipped": [...]}
+```
+
+`update_documents(ids, documents)` does the same from LangChain `Document` objects.
+
+### Partitions
+
+Named partitions isolate subsets of an index (requires pyenvector >= 1.5.0):
+
+```python
+store.create_partition("tenant_a")
+
+store.add_texts(["tenant-a data"], partition_name="tenant_a")
+results = store.similarity_search(query, k=3, partition_names=["tenant_a"])
+
+print(store.list_partitions())  # [{"name": ..., "status": ..., "num_vectors": ...}]
+store.drop_partition("tenant_a")  # removes the partition and its data
+```
+
+Omitting `partition_name` / `partition_names` uses the default partition or searches the whole index.
 
 
 ## Troubleshooting

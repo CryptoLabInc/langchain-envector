@@ -66,12 +66,14 @@ class Envector(VectorStore):  # type: ignore[misc]
         ids: Optional[List[str]] = None,
         *,
         vectors: Optional[List[List[float]]] = None,
+        partition_name: Optional[str] = None,
         **kwargs: Any,
     ) -> List[int]:
         """Add texts to the encrypted index.
 
         If embeddings are provided, the texts are embedded automatically.
-        Otherwise, provide pre-computed `vectors`.
+        Otherwise, provide pre-computed `vectors`. Pass `partition_name` to
+        insert into a named partition (pyenvector >= 1.5.0).
         """
         if not texts:
             return []
@@ -90,7 +92,9 @@ class Envector(VectorStore):  # type: ignore[misc]
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
 
         # Insert using high-level pyenvector Index
-        result_ids = self.client.index.insert(data=vectors, metadata=packed)
+        result_ids = self.client.index.insert(
+            data=vectors, metadata=packed, partition_name=partition_name
+        )
 
         # Return ephemeral placeholders to satisfy VectorStore interface,
         # but they are NOT persisted/addressable.
@@ -103,6 +107,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         await_completion: bool = False,
         timeout_s: float = 600.0,
         poll_interval_s: float = 1.0,
+        partition_name: Optional[str] = None,
         **kwargs: Any,
     ) -> Optional[bool]:
         """Delete items from the encrypted index by item ID.
@@ -126,8 +131,75 @@ class Envector(VectorStore):  # type: ignore[misc]
             await_completion=await_completion,
             timeout_s=timeout_s,
             poll_interval_s=poll_interval_s,
+            partition_name=partition_name,
         )
         return True
+
+    def update_metadata(
+        self,
+        ids: List[Any],
+        texts: List[str],
+        metadatas: Optional[List[Dict[str, Any]]] = None,
+        *,
+        partition_name: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Dict[str, List[int]]:
+        """Replace the stored text/metadata of existing items by item ID.
+
+        Each item's stored payload is replaced wholesale with the packed
+        ``{"text": ..., "metadata": ...}`` envelope built from ``texts[i]`` /
+        ``metadatas[i]`` — supply the full new content, not a partial patch.
+        Vectors are untouched; to change a vector, delete and re-insert.
+
+        Returns the SDK result: ``{"updated": [...], "skipped": [...]}`` where
+        skipped IDs were missing or already deleted.
+        """
+        if not ids:
+            return {"updated": [], "skipped": []}
+        if len(texts) != len(ids):
+            raise ValueError("ids and texts must have equal length")
+        if metadatas is None:
+            metadatas = [{} for _ in texts]
+        if len(metadatas) != len(texts):
+            raise ValueError("texts and metadatas must have equal length")
+        try:
+            item_ids = [int(x) for x in ids]
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                "Envector.update_metadata expects integer item IDs (or numeric "
+                "strings) as returned by add_texts/add_documents."
+            ) from e
+
+        packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
+        return self.client.index.update_metadata(
+            item_ids=item_ids, metadata=packed, partition_name=partition_name
+        )
+
+    def update_documents(
+        self,
+        ids: List[Any],
+        documents: List[Document],
+        **kwargs: Any,
+    ) -> Dict[str, List[int]]:
+        """Replace existing items' stored content from LangChain Documents."""
+        texts = [getattr(d, "page_content", "") for d in documents]
+        metadatas = [getattr(d, "metadata", {}) for d in documents]
+        return self.update_metadata(ids, texts, metadatas, **kwargs)
+
+    # -------------------------------
+    # Partitions (pyenvector >= 1.5.0)
+    # -------------------------------
+    def create_partition(self, partition_name: str) -> Any:
+        """Create a named partition in the index."""
+        return self.client.index.create_partition(partition_name)
+
+    def drop_partition(self, partition_name: str) -> Any:
+        """Drop a named partition from the index (its data is removed)."""
+        return self.client.index.drop_partition(partition_name)
+
+    def list_partitions(self) -> Any:
+        """List the index's partitions as dicts {name, status, num_vectors}."""
+        return self.client.index.list_partitions()
 
     def _similarity_search_with_scores(
         self,
@@ -137,12 +209,16 @@ class Envector(VectorStore):  # type: ignore[misc]
         filter: Optional[Dict[str, Any]] = None,
         score_threshold: Optional[float] = None,
         fetch_k: Optional[int] = None,
+        partition_names: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         top_k = fetch_k or self.config.index.fetch_k or k
 
         results = self.client.index.search(
-            query=embedding, top_k=top_k, output_fields=self.config.index.output_fields
+            query=embedding,
+            top_k=top_k,
+            output_fields=self.config.index.output_fields,
+            partition_names=partition_names,
         )
         # pyenvector Index.search returns a list for each query; we passed single query
         result = (
@@ -204,6 +280,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         filter: Optional[Dict[str, Any]] = None,
         score_threshold: Optional[float] = None,
         fetch_k: Optional[int] = None,
+        partition_names: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Search similar items for a text query.
@@ -223,6 +300,7 @@ class Envector(VectorStore):  # type: ignore[misc]
             filter=filter,
             score_threshold=score_threshold,
             fetch_k=fetch_k,
+            partition_names=partition_names,
             **kwargs,
         )
         return [
@@ -244,6 +322,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         filter: Optional[Dict[str, Any]] = None,
         score_threshold: Optional[float] = None,
         fetch_k: Optional[int] = None,
+        partition_names: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         embedding: Optional[List[float]] = kwargs.pop("embedding", None)
@@ -258,6 +337,7 @@ class Envector(VectorStore):  # type: ignore[misc]
             filter=filter,
             score_threshold=score_threshold,
             fetch_k=fetch_k,
+            partition_names=partition_names,
             **kwargs,
         )
 
@@ -270,6 +350,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         filter: Optional[Dict[str, Any]] = None,
         score_threshold: Optional[float] = None,
         fetch_k: Optional[int] = None,
+        partition_names: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> List[Document]:
         docs_with_scores = self._similarity_search_with_scores(
@@ -278,6 +359,7 @@ class Envector(VectorStore):  # type: ignore[misc]
             filter=filter,
             score_threshold=score_threshold,
             fetch_k=fetch_k,
+            partition_names=partition_names,
             **kwargs,
         )
         return [doc for doc, _ in docs_with_scores]
@@ -290,6 +372,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         filter: Optional[Dict[str, Any]] = None,
         score_threshold: Optional[float] = None,
         fetch_k: Optional[int] = None,
+        partition_names: Optional[List[str]] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         return self._similarity_search_with_scores(
@@ -298,6 +381,7 @@ class Envector(VectorStore):  # type: ignore[misc]
             filter=filter,
             score_threshold=score_threshold,
             fetch_k=fetch_k,
+            partition_names=partition_names,
             **kwargs,
         )
 

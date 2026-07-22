@@ -38,6 +38,15 @@ class EnvectorClient:
                 host=c.host, port=c.port, access_token=c.access_token, secure=c.secure
             )
 
+        # Optional KMS connection (shares the indexer's auth session when
+        # called after init_connect)
+        if c.kms_address:
+            ev_client.init_kms_connect(
+                kms_address=c.kms_address,
+                secure=c.kms_secure,
+                ca_cert=c.kms_ca_cert,
+            )
+
         # Index config + key setup
         ev_client.init_index_config(
             index_name=i.index_name,

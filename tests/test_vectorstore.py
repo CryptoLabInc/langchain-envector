@@ -352,3 +352,98 @@ def test_add_documents_with_explicit_vectors():
     ret = store.add_documents(docs, vectors=vecs)
     assert len(ret) == 2
     assert len(client.index.inserted) == 1
+
+
+def test_add_texts_forwards_partition_name():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.add_texts(["t1"], partition_name="tenant_a")
+    assert client.index.inserted[0]["partition_name"] == "tenant_a"
+
+    store.add_texts(["t2"])
+    assert client.index.inserted[1]["partition_name"] is None
+
+
+def test_similarity_search_forwards_partition_names():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.similarity_search("q", k=1, partition_names=["p1", "p2"])
+    assert client.index.searched[0]["partition_names"] == ["p1", "p2"]
+
+    store.similarity_search_with_score("q", k=1)
+    assert client.index.searched[1]["partition_names"] is None
+
+
+def test_delete_forwards_partition_name():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["x"])
+
+    store.delete(ids=ids, partition_name="tenant_a")
+    assert client.index.deleted[0]["partition_name"] == "tenant_a"
+
+
+def test_update_metadata_packs_and_forwards():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["old"], metadatas=[{"v": 1}])
+
+    result = store.update_metadata(ids, ["new"], metadatas=[{"v": 2}])
+    assert result == {"updated": ids, "skipped": []}
+
+    call = client.index.metadata_updates[0]
+    assert call["item_ids"] == ids
+    assert '"new"' in call["metadata"][0]
+    assert '"v": 2' in call["metadata"][0]
+    assert call["partition_name"] is None
+
+
+def test_update_metadata_validates_lengths_and_ids():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    assert store.update_metadata([], []) == {"updated": [], "skipped": []}
+
+    try:
+        store.update_metadata([1, 2], ["only-one"])
+        assert False, "Expected ValueError for length mismatch"
+    except ValueError as e:
+        assert "equal length" in str(e)
+
+    try:
+        store.update_metadata(["abc"], ["t"])
+        assert False, "Expected ValueError for non-numeric ids"
+    except ValueError as e:
+        assert "integer item IDs" in str(e)
+
+    assert client.index.metadata_updates == []
+
+
+def test_update_documents_delegates():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["old"])
+
+    docs = [LC_Document(page_content="fresh", metadata={"k": "v"})]
+    result = store.update_documents(ids, docs, partition_name="p1")
+    assert result["updated"] == ids
+
+    call = client.index.metadata_updates[0]
+    assert '"fresh"' in call["metadata"][0]
+    assert call["partition_name"] == "p1"
+
+
+def test_partition_management_helpers():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.create_partition("p1")
+    store.create_partition("p2")
+    names = [p["name"] for p in store.list_partitions()]
+    assert names == ["p1", "p2"]
+
+    store.drop_partition("p1")
+    names = [p["name"] for p in store.list_partitions()]
+    assert names == ["p2"]
