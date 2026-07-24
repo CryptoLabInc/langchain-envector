@@ -19,13 +19,13 @@ import json
 from pathlib import Path
 from typing import List
 
-from libs.envector.config import (
+from langchain_envector.config import (
     ConnectionConfig,
     EnvectorConfig,
     IndexSettings,
     KeyConfig,
 )
-from libs.envector.vectorstore import Envector
+from langchain_envector.vectorstore import Envector
 
 
 def batched(seq, n):
@@ -63,7 +63,7 @@ def main():
     cfg = EnvectorConfig(
         connection=ConnectionConfig(address=args.address),
         key=KeyConfig(
-            key_path=args.key_path, key_id=args.key_id, preset="ip", eval_mode="rmp"
+            key_path=args.key_path, key_id=args.key_id, preset="ip3", eval_mode="mms32"
         ),
         index=IndexSettings(
             index_name=args.index_name,

@@ -10,12 +10,17 @@ class ConnectionConfig:
     host: Optional[str] = None
     port: Optional[int] = None
     access_token: Optional[str] = None
+    secure: Optional[bool] = None  # None = SDK default (secure iff a token is provided)
+    # Optional enVector KMS connection (pyenvector >= 1.5.0).
+    kms_address: Optional[str] = None  # host:port of the KMS combined service
+    kms_secure: Optional[bool] = None  # independent from the endpoint `secure` option
+    kms_ca_cert: Optional[str] = None  # PEM CA bundle path (or PEM bytes)
 
 
 @dataclass
 class KeyConfig:
-    key_path: str
-    key_id: str
+    key_path: Optional[str] = None  # local key dir; omit when keys are KMS-managed
+    key_id: Optional[str] = None
     preset: Optional[str] = None
     eval_mode: Optional[str] = None
     seal_mode: Optional[str] = None
@@ -26,11 +31,14 @@ class KeyConfig:
 class IndexSettings:
     index_name: str
     dim: int
-    query_encryption: str = "plain"  # plain | cipher
-    index_encryption: str = "cipher"  # fixed to cipher
+    query_encryption: str = "plain"
+    index_encryption: str = "cipher"
     index_type: str = "flat"
     output_fields: List[str] = field(default_factory=lambda: ["metadata"])
     fetch_k: Optional[int] = None  # over-fetch to support client-side filters
+    description: Optional[str] = None
+    metadata_encryption: Optional[bool] = None
+    index_params: Optional[dict] = None  # catch-all for any additional index parameters
 
 
 @dataclass

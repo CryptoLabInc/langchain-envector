@@ -74,30 +74,37 @@ class TestEnvectorVectorStore(VectorStoreIntegrationTests):
             except Exception:
                 pass
 
+    # Note: test_delete_missing_content is NOT overridden — Envector.delete
+    # (pyenvector >= 1.4) accepts numeric-string IDs and must not raise for
+    # missing items, which is exactly what the standard test verifies.
+
     @pytest.mark.xfail(
-        reason="Envector does not support delete semantics for standard tests."
+        reason="Standard test requires user-provided IDs to be honored by "
+        "add_documents; Envector assigns its own item IDs (delete itself is "
+        "supported with returned item IDs)."
     )
     def test_deleting_documents(self, vectorstore: VectorStore) -> None:
         pass
 
     @pytest.mark.xfail(
-        reason="Envector does not support delete semantics for standard tests."
+        reason="Standard test requires user-provided IDs to be honored by "
+        "add_documents; Envector assigns its own item IDs (delete itself is "
+        "supported with returned item IDs)."
     )
     def test_deleting_bulk_documents(self, vectorstore: VectorStore) -> None:
         pass
 
     @pytest.mark.xfail(
-        reason="Envector does not support delete semantics for standard tests."
+        reason="Standard test requires upsert via user-provided IDs; Envector "
+        "assigns its own item IDs (metadata replacement is supported via "
+        "update_metadata with returned item IDs, pyenvector >= 1.5)."
     )
-    def test_delete_missing_content(self, vectorstore: VectorStore) -> None:
-        pass
-
-    @pytest.mark.xfail(reason="Envector does not support update-by-id semantics yet.")
     def test_add_documents_by_id_with_mutation(self, vectorstore: VectorStore) -> None:
         pass
 
     @pytest.mark.xfail(
-        reason="Envector does not support idempotent add-by-id semantics yet."
+        reason="Standard test requires idempotent add via user-provided IDs; "
+        "Envector assigns its own item IDs."
     )
     def test_add_documents_with_ids_is_idempotent(
         self, vectorstore: VectorStore
@@ -116,28 +123,5 @@ class TestEnvectorVectorStore(VectorStoreIntegrationTests):
     def test_vectorstore_still_empty(self, vectorstore: VectorStore) -> None:
         pass
 
-    @pytest.mark.xfail(
-        reason="Envector does not support delete semantics for standard tests."
-    )
-    async def test_deleting_documents_async(self, vectorstore: VectorStore) -> None:
-        pass
-
-    @pytest.mark.xfail(
-        reason="Envector does not support delete semantics for standard tests."
-    )
-    async def test_deleting_bulk_documents_async(
-        self, vectorstore: VectorStore
-    ) -> None:
-        pass
-
-    @pytest.mark.xfail(
-        reason="Envector does not support delete semantics for standard tests."
-    )
-    async def test_delete_missing_content_async(self, vectorstore: VectorStore) -> None:
-        pass
-
-    @pytest.mark.xfail(reason="Envector does not support update-by-id semantics yet.")
-    async def test_add_documents_by_id_with_mutation_async(
-        self, vectorstore: VectorStore
-    ) -> None:
-        pass
+    # Async standard tests are not overridden: has_async=False makes the base
+    # class skip them.
