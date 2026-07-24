@@ -56,6 +56,13 @@ class Envector(VectorStore):  # type: ignore[misc]
         self.client = client or EnvectorClient(config)
         self.client.init()
 
+    def _loaded_index(self):
+        # Fresh indexes start unloaded; delete/update_metadata require a loaded index
+        index = self.client.index
+        if not getattr(index, "is_loaded", True):
+            index.load()
+        return index
+
     # -------------------------------
     # VectorStore API
     # -------------------------------
@@ -126,7 +133,7 @@ class Envector(VectorStore):  # type: ignore[misc]
                 "as returned by add_texts/add_documents."
             ) from e
 
-        self.client.index.delete(
+        self._loaded_index().delete(
             item_ids=item_ids,
             await_completion=await_completion,
             timeout_s=timeout_s,
@@ -171,7 +178,7 @@ class Envector(VectorStore):  # type: ignore[misc]
             ) from e
 
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
-        return self.client.index.update_metadata(
+        return self._loaded_index().update_metadata(
             item_ids=item_ids, metadata=packed, partition_name=partition_name
         )
 
