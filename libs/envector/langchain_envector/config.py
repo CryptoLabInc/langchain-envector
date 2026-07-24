@@ -10,10 +10,10 @@ class ConnectionConfig:
     host: Optional[str] = None
     port: Optional[int] = None
     access_token: Optional[str] = None
-    secure: bool = True  # default to secure connection if not specified
+    secure: Optional[bool] = None  # None = SDK default (secure iff a token is provided)
     # Optional enVector KMS connection (pyenvector >= 1.5.0).
     kms_address: Optional[str] = None  # host:port of the KMS combined service
-    kms_secure: bool = True  # independent from the endpoint `secure` option
+    kms_secure: Optional[bool] = None  # independent from the endpoint `secure` option
     kms_ca_cert: Optional[str] = None  # PEM CA bundle path (or PEM bytes)
 
 
