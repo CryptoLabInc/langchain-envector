@@ -62,7 +62,7 @@ Key dataclasses live in `libs/envector/config.py`:
       index=IndexSettings(
         index_name=INDEX_NAME, 
         dim=vector_dim, 
-        query_encryption="cipher"
+        query_encryption="plain"
       ),
       create_if_missing=True,
   )
