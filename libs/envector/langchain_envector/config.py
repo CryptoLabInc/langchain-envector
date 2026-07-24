@@ -19,8 +19,8 @@ class ConnectionConfig:
 
 @dataclass
 class KeyConfig:
-    key_path: str
-    key_id: str
+    key_path: Optional[str] = None  # local key dir; omit when keys are KMS-managed
+    key_id: Optional[str] = None
     preset: Optional[str] = None
     eval_mode: Optional[str] = None
     seal_mode: Optional[str] = None

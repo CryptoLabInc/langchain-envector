@@ -25,7 +25,7 @@ Encrypted vector search for LangChain using Envector, powered by homomorphic enc
 
 ## Configuration
 Key dataclasses live in `libs/envector/config.py`:
-- `ConnectionConfig`: address or host/port for EnVector; optional `kms_address` / `kms_secure` / `kms_ca_cert` for the enVector KMS service (pyenvector >= 1.5.0).
+- `ConnectionConfig`: address or host/port for EnVector; optional `kms_address` / `kms_secure` / `kms_ca_cert` for the enVector KMS service (pyenvector >= 1.5.0). When `kms_address` is set, keys are KMS-managed — omit `KeyConfig.key_path`.
 - `KeyConfig`: key path, key ID, optional preset/eval mode.
 - `IndexSettings`: index name, dimension (32–4096), query encryption mode, optional output fields and fetch parameters.
 - `EnvectorConfig`: wraps the above and enables auto-creation via `create_if_missing`.

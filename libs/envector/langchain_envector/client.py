@@ -47,11 +47,11 @@ class EnvectorClient:
                 ca_cert=c.kms_ca_cert,
             )
 
-        # Index config + key setup
+        # Index config + key setup (KMS-managed keys require key_path=None)
         ev_client.init_index_config(
             index_name=i.index_name,
             dim=i.dim,
-            key_path=k.key_path,
+            key_path=None if c.kms_address else k.key_path,
             key_id=k.key_id,
             seal_mode=k.seal_mode,
             seal_kek_path=k.seal_kek_path,
