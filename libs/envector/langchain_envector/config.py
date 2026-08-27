@@ -42,8 +42,42 @@ class IndexSettings:
 
 
 @dataclass
+class WriteSettings:
+    """Whether each write path waits for the server before returning.
+
+    enVector writes are asynchronous server-side: the call returns once the
+    request is accepted, and the server finishes the work afterwards. What that
+    means for the next read differs per operation, so each default below was
+    measured against a live stack rather than assumed.
+
+    - insert: rows become searchable through ``Index.insert(load=True)``, which
+      the SDK does by default. Waiting additionally blocks until the shards are
+      merged and saved — durability, not visibility — and cost a flat ~14s per
+      call regardless of batch size, while not waiting never lost a row across
+      batches of 2, 100 and 400. So it stays off.
+    - delete: the SDK's own default is to wait, and the wait returned
+      immediately in measurement. Left on.
+
+    Set either to ``False`` for fire-and-forget bulk work, then wait once at the
+    end.
+
+    Only the waiting is configured here. The SDK's per-call tuning knobs
+    (``execute_until``, ``n_workers``, ``use_row_insert``, ...) keep their own
+    defaults and reach ``Index.insert`` through ``add_texts(**kwargs)``.
+    """
+
+    await_insert: bool = False
+    await_delete: bool = True
+
+    # Shared polling budget for the await_* waits above.
+    timeout_s: float = 600.0
+    poll_interval_s: float = 1.0
+
+
+@dataclass
 class EnvectorConfig:
     connection: ConnectionConfig
     key: KeyConfig
     index: IndexSettings
     create_if_missing: bool = True
+    write: WriteSettings = field(default_factory=WriteSettings)

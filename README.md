@@ -28,6 +28,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - `ConnectionConfig`: address or host/port for EnVector; optional `kms_address` / `kms_secure` / `kms_ca_cert` for the enVector KMS service (pyenvector >= 1.5.0). When `kms_address` is set, keys are KMS-managed — omit `KeyConfig.key_path`.
 - `KeyConfig`: key path, key ID, optional preset/eval mode.
 - `IndexSettings`: index name, dimension (32–4096), query encryption mode, optional output fields and fetch parameters.
+- `WriteSettings`: whether each write path waits for the server before returning. EnVector writes are asynchronous server-side, but what that means for the next read differs per operation, so each default is documented with the measurement behind it.
 - `EnvectorConfig`: wraps the above and enables auto-creation via `create_if_missing`.
 
 ## Data Model
@@ -135,6 +136,16 @@ print(result)  # {"updated": [...], "skipped": [...]}
 ```
 
 `update_documents(ids, documents)` does the same from LangChain `Document` objects.
+
+### Delete
+
+```python
+store.delete(ids)  # accepts ints or numeric strings, e.g. doc.id
+```
+
+Deletion is asynchronous server-side; by default this waits until the affected
+shards are rebuilt, which is the SDK's own default and returned immediately in
+measurement.
 
 ### Partitions
 

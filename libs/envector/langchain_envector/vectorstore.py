@@ -57,7 +57,12 @@ class Envector(VectorStore):  # type: ignore[misc]
         self.client.init()
 
     def _loaded_index(self):
-        # Fresh indexes start unloaded; delete/update_metadata require a loaded index
+        """Return the bound Index, loading it first if the server has not.
+
+        Fresh indexes start unloaded, and the SDK raises
+        ``ValueError("Index not loaded")`` from search as well as from the write
+        paths rather than loading implicitly.
+        """
         index = self.client.index
         if not getattr(index, "is_loaded", True):
             index.load()
@@ -74,13 +79,24 @@ class Envector(VectorStore):  # type: ignore[misc]
         *,
         vectors: Optional[List[List[float]]] = None,
         partition_name: Optional[str] = None,
+        await_completion: Optional[bool] = None,
         **kwargs: Any,
     ) -> List[int]:
-        """Add texts to the encrypted index.
+        """Add texts to the encrypted index and return their item IDs.
 
         If embeddings are provided, the texts are embedded automatically.
         Otherwise, provide pre-computed `vectors`. Pass `partition_name` to
-        insert into a named partition (pyenvector >= 1.5.0).
+        insert into a named partition.
+
+        Inserted rows are searchable straight away: `Index.insert` publishes them
+        via its own ``load`` step, so a following `similarity_search` sees them
+        without any wait here. ``await_completion=True`` additionally blocks
+        until the shards are merged and saved — durability rather than
+        visibility — which is off by default (``config.write.await_insert``).
+
+        Any other keyword argument goes straight to ``Index.insert``, which is
+        where the SDK's own tuning knobs live (``execute_until``, ``n_workers``,
+        ``use_row_insert``, ...).
         """
         if not texts:
             return []
@@ -98,22 +114,26 @@ class Envector(VectorStore):  # type: ignore[misc]
         # Prepare metadata JSON strings per item
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
 
-        # Insert using high-level pyenvector Index
-        result_ids = self.client.index.insert(
-            data=vectors, metadata=packed, partition_name=partition_name
+        w = self.config.write
+        return self.client.index.insert(
+            data=vectors,
+            metadata=packed,
+            partition_name=partition_name,
+            await_completion=(
+                w.await_insert if await_completion is None else await_completion
+            ),
+            timeout_s=kwargs.pop("timeout_s", w.timeout_s),
+            poll_interval_s=kwargs.pop("poll_interval_s", w.poll_interval_s),
+            **kwargs,
         )
-
-        # Return ephemeral placeholders to satisfy VectorStore interface,
-        # but they are NOT persisted/addressable.
-        return result_ids
 
     def delete(
         self,
         ids: Optional[List[Any]] = None,
         *,
-        await_completion: bool = False,
-        timeout_s: float = 600.0,
-        poll_interval_s: float = 1.0,
+        await_completion: Optional[bool] = None,
+        timeout_s: Optional[float] = None,
+        poll_interval_s: Optional[float] = None,
         partition_name: Optional[str] = None,
         **kwargs: Any,
     ) -> Optional[bool]:
@@ -122,6 +142,10 @@ class Envector(VectorStore):  # type: ignore[misc]
         Accepts the ``item_id`` values returned from ``add_texts`` /
         ``add_documents``. Both ``int`` and ``str`` (numeric) IDs are accepted
         and coerced to ``int`` before being passed to the SDK.
+
+        Deletion is asynchronous server-side; by default this waits until the
+        affected shards are rebuilt, which is the SDK's own default and returned
+        immediately in measurement. IDs matching no live row are a no-op.
         """
         if not ids:
             return False
@@ -133,11 +157,16 @@ class Envector(VectorStore):  # type: ignore[misc]
                 "as returned by add_texts/add_documents."
             ) from e
 
+        w = self.config.write
         self._loaded_index().delete(
             item_ids=item_ids,
-            await_completion=await_completion,
-            timeout_s=timeout_s,
-            poll_interval_s=poll_interval_s,
+            await_completion=(
+                w.await_delete if await_completion is None else await_completion
+            ),
+            timeout_s=w.timeout_s if timeout_s is None else timeout_s,
+            poll_interval_s=(
+                w.poll_interval_s if poll_interval_s is None else poll_interval_s
+            ),
             partition_name=partition_name,
         )
         return True
@@ -221,7 +250,7 @@ class Envector(VectorStore):  # type: ignore[misc]
     ) -> List[Tuple[Document, float]]:
         top_k = fetch_k or self.config.index.fetch_k or k
 
-        results = self.client.index.search(
+        results = self._loaded_index().search(
             query=embedding,
             top_k=top_k,
             output_fields=self.config.index.output_fields,

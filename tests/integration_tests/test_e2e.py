@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import secrets
-import time
 import pytest
 
 from langchain_envector.config import (
@@ -85,7 +84,9 @@ def test_e2e_vectorstore_plain():
     # Plain query mode
     cfg_plain = EnvectorConfig(
         connection=ConnectionConfig(address=address),
-        key=KeyConfig(key_path=key_path, key_id=key_id, preset="ip3", eval_mode="mms32"),
+        key=KeyConfig(
+            key_path=key_path, key_id=key_id, preset="ip3", eval_mode="mms32"
+        ),
         index=IndexSettings(
             index_name=f"{base_index_name}_plain", dim=dim, query_encryption="plain"
         ),
@@ -120,8 +121,8 @@ def test_e2e_vectorstore_plain():
         e2 = [0.0, 1.0] + [0.0] * (dim - 2)
         store_plain.add_texts(texts[:2], metadatas=metas[:2], vectors=[e1, e2])
 
-    # Give server a moment if needed
-    time.sleep(0.2)
+    # No sleep needed: add_texts waits for the inserted rows to become
+    # searchable by default (config.write.await_insert).
 
     # Search
     if use_emb:

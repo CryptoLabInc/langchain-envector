@@ -294,7 +294,8 @@ def test_delete_passes_item_ids_to_sdk():
     assert len(client.index.deleted) == 1
     call = client.index.deleted[0]
     assert call["item_ids"] == [2, 4]
-    assert call["await_completion"] is False
+    # The SDK's own default is to wait for the shard rebuild; 1.5 forced it off
+    assert call["await_completion"] is True
 
 
 def test_delete_accepts_string_ids():
@@ -447,3 +448,43 @@ def test_partition_management_helpers():
     store.drop_partition("p1")
     names = [p["name"] for p in store.list_partitions()]
     assert names == ["p2"]
+
+
+def test_add_texts_does_not_wait_but_can_be_asked_to():
+    # Inserted rows are published by Index.insert's own load step, so the extra
+    # merge-and-save wait buys no visibility and is off by default.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.add_texts(["t1"])
+    call = client.index.inserted[0]
+    assert call["await_completion"] is False
+    assert call["timeout_s"] == store.config.write.timeout_s
+
+    store.add_texts(["t2"], await_completion=True)
+    assert client.index.inserted[1]["await_completion"] is True
+
+
+def test_add_texts_passes_sdk_tuning_knobs_through_kwargs():
+    # execute_until / n_workers / use_row_insert are the SDK's own knobs; they
+    # are not mirrored in WriteSettings, they just travel through **kwargs.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.add_texts(["t1"], execute_until="flush", n_workers=4, use_row_insert=True)
+    call = client.index.inserted[0]
+    assert call["execute_until"] == "flush"
+    assert call["n_workers"] == 4
+    assert call["use_row_insert"] is True
+
+
+def test_writes_load_the_index_first():
+    client = FakeClient()
+    index = client.index
+    assert index.is_loaded is False
+
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    # delete/update/search all require a loaded index (1.5 and 1.6 alike)
+    store.delete(ids=[1])
+    assert index.load_calls == 1
+    assert index.is_loaded is True

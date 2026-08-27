@@ -25,16 +25,41 @@ class FakeIndex:
     partitions: List[str] = field(default_factory=list)
     searched: List[Dict[str, Any]] = field(default_factory=list)
     search_payload: Optional[List[List[Dict[str, Any]]]] = None
+    is_loaded: bool = False
+    load_calls: int = 0
+
+    def load(self):
+        self.load_calls += 1
+        self.is_loaded = True
 
     def insert(
         self,
         data: List[List[float]],
         metadata: List[str],
         partition_name: Optional[str] = None,
-    ):
+        await_completion: bool = False,
+        execute_until: str = "segmentation",
+        load: bool = True,
+        use_row_insert: bool = False,
+        n_workers: int = 1,
+        timeout_s: float = 86400.0,
+        poll_interval_s: float = 1.0,
+    ) -> List[int]:
         self.inserted.append(
-            {"data": data, "metadata": metadata, "partition_name": partition_name}
+            {
+                "data": data,
+                "metadata": metadata,
+                "partition_name": partition_name,
+                "await_completion": await_completion,
+                "execute_until": execute_until,
+                "use_row_insert": use_row_insert,
+                "n_workers": n_workers,
+                "timeout_s": timeout_s,
+                "poll_interval_s": poll_interval_s,
+            }
         )
+        if load:
+            self.is_loaded = True
         return [len(self.inserted) + i + 1 for i in range(len(metadata))]
 
     def delete(
@@ -91,9 +116,7 @@ class FakeIndex:
         output_fields: List[str],
         partition_names: Optional[List[str]] = None,
     ):
-        self.searched.append(
-            {"top_k": top_k, "partition_names": partition_names}
-        )
+        self.searched.append({"top_k": top_k, "partition_names": partition_names})
         if self.search_payload is not None:
             return self.search_payload
         # Default one-hit result with metadata JSON

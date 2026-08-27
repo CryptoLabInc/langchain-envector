@@ -83,14 +83,16 @@ def main():
             texts.append(rec["text"])  # type: ignore
             metas.append(rec.get("metadata", {}))
 
-    # Insert in batches to respect SDK batch behavior
+    if embeddings is None:
+        # Without embeddings, require manual vectors; here we simply skip.
+        # Users should provide --use-embeddings or adapt to their vector source.
+        raise ValueError(
+            "--use-embeddings is required unless you provide vectors explicitly."
+        )
+
+    # Insert in batches to respect SDK batch behavior. Each batch is searchable
+    # as soon as it returns, so no waiting is needed between batches.
     for t_batch, m_batch in zip(batched(texts, args.batch), batched(metas, args.batch)):
-        if embeddings is None:
-            # Without embeddings, require manual vectors; here we simply skip.
-            # Users should provide --use-embeddings or adapt to their vector source.
-            raise ValueError(
-                "--use-embeddings is required unless you provide vectors explicitly."
-            )
         store.add_texts(t_batch, metadatas=m_batch)
 
     print(f"Inserted {len(texts)} documents into index '{args.index_name}'")
