@@ -52,7 +52,7 @@ def _try_import_item_types():
         from pyenvector import UpdateItem, UpsertItem  # type: ignore
 
         return UpdateItem, UpsertItem
-    except Exception:  # pragma: no cover - exercised only without the SDK
+    except ImportError:  # pragma: no cover - exercised only without the SDK
 
         @dataclass
         class UpdateItem:  # type: ignore[no-redef]
@@ -450,6 +450,12 @@ class Envector(VectorStore):  # type: ignore[misc]
         Inserts stay fast because the wait is paid here — once, and only when
         rows are actually mutated — rather than on every insert. Search and
         delete are unaffected and need no wait.
+
+        The wait grows with the number of un-awaited insert batches, because
+        the server merges them one at a time: 20 batches took ~125s. It
+        therefore uses ``config.write.drain_timeout_s`` rather than the
+        per-call ``timeout_s``. Timing out raises and leaves the pending ids
+        in place, so nothing is mutated until a retry drains them.
         """
         if not self._pending_inserts:
             return
@@ -463,7 +469,7 @@ class Envector(VectorStore):  # type: ignore[misc]
                 index.wait_for_insert_stage(
                     request_ids=request_ids,
                     target_stage="segmentation",
-                    timeout_s=w.timeout_s if timeout_s is None else timeout_s,
+                    timeout_s=w.drain_timeout_s if timeout_s is None else timeout_s,
                     poll_interval_s=(
                         w.poll_interval_s
                         if poll_interval_s is None

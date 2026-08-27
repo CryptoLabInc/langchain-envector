@@ -43,11 +43,12 @@ Key dataclasses live in `libs/envector/config.py`:
 ## Limitations
 - Manual item IDs are not accepted on insert: EnVector issues its own `item_id` values and cannot create an item under a caller-chosen ID. Use the returned IDs for subsequent `delete` / `update_documents` / `upsert_documents` calls.
 - Fetch-by-ID (`get_by_ids`) is unsupported.
-- Filtering happens client-side; ensure metadata is JSON for structured filters.
+- Filtering happens client-side, after the server has returned `k` hits, so `similarity_search(k=4, filter=...)` returns **fewer than `k`** whenever some of those hits are filtered out. Pass `fetch_k` (or set `IndexSettings.fetch_k`) to over-fetch — with `fetch_k=10` the same query returned the full 4.
 - Multi-key indexes and cloud key stores are not wired up yet — see [`TODO.md`](TODO.md).
 - One enVector endpoint per process. `pyenvector` keeps a single process-wide connection, so several stores can coexist only while they all point at the same endpoint; the integration reuses that connection for them. Two stores pointing at **different** servers in one process is not supported — the second connection closes the first one's channel.
 - `update_documents` / `upsert_documents` calls larger than 10,000 items are split into several server transactions. If a later chunk fails, the earlier ones stay applied.
-- The first `update_documents` / `upsert_documents` after an un-awaited `add_texts` blocks until those inserts have merged (~15s), because mutating an unmerged row drops it from search — see [`TODO.md`](TODO.md). Inserts themselves stay fast, and search and delete never wait.
+- The first `update_documents` / `upsert_documents` after un-awaited `add_texts` calls blocks until those inserts have merged, because mutating an unmerged row drops it from search — see [`TODO.md`](TODO.md). The wait grows with the number of un-awaited batches (the server merges them one at a time: ~15s for one, ~125s for twenty), so it has its own `WriteSettings.drain_timeout_s`. Inserts themselves stay fast, search and delete never wait, and `await_insert=True` moves the cost back into ingestion if you interleave writing and updating.
+- Pending inserts are tracked per store instance. If one store adds documents without waiting and a *different* store instance updates those same rows, the second one has nothing to drain — use one store per index, or `await_insert=True`.
 
 ## Examples
 ### Configuration

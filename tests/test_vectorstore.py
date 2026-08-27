@@ -727,3 +727,16 @@ def test_failed_drain_keeps_the_pending_inserts():
     # Still pending, so the next mutation retries instead of mutating unmerged rows
     assert store._pending_inserts
     assert client.index.updates == []
+
+
+def test_drain_uses_its_own_timeout_budget():
+    # The drain waits for every un-awaited insert batch and the server merges
+    # them one at a time, so it must not share the per-call timeout.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["a"])
+
+    store.update_metadata(ids, ["b"])
+    wait = client.index.stage_waits[0]
+    assert wait["timeout_s"] == store.config.write.drain_timeout_s
+    assert wait["timeout_s"] > store.config.write.timeout_s

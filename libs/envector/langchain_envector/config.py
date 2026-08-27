@@ -59,7 +59,8 @@ class WriteSettings:
       immediately in measurement. Left on.
     - update: the call returns at swap-commit with the rebuilt rows' visibility
       still pending. Without the wait the updated row was missing from the very
-      next search every time. Left on.
+      next search every time. Left on. Updates additionally wait for any
+      un-awaited inserts to merge first — see `Envector._drain_pending_inserts`.
 
     Set any of these to ``False`` for fire-and-forget bulk work, then wait once
     at the end.
@@ -76,6 +77,13 @@ class WriteSettings:
     # Shared polling budget for the await_* waits above.
     timeout_s: float = 600.0
     poll_interval_s: float = 1.0
+
+    # Budget for draining un-awaited inserts before an update/upsert. Separate
+    # and much larger than `timeout_s` because that wait grows with the number
+    # of un-awaited insert batches — the server merges them one at a time, so
+    # 20 batches took ~125s — and timing it out only forces a retry of the same
+    # wait. Nothing is mutated until the drain succeeds.
+    drain_timeout_s: float = 3600.0
 
 
 @dataclass

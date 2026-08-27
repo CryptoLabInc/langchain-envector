@@ -98,6 +98,7 @@ class FakeIndex:
             {
                 "request_ids": list(request_ids),
                 "target_stage": target_stage,
+                "timeout_s": timeout_s,
                 "partition_name": partition_name,
             }
         )
