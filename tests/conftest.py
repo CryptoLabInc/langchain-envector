@@ -21,16 +21,24 @@ class FakeEmbeddings:
 class FakeIndex:
     inserted: List[Dict[str, Any]] = field(default_factory=list)
     deleted: List[Dict[str, Any]] = field(default_factory=list)
-    metadata_updates: List[Dict[str, Any]] = field(default_factory=list)
+    updates: List[Dict[str, Any]] = field(default_factory=list)
+    upserts: List[Dict[str, Any]] = field(default_factory=list)
     partitions: List[str] = field(default_factory=list)
     searched: List[Dict[str, Any]] = field(default_factory=list)
+    stage_waits: List[Dict[str, Any]] = field(default_factory=list)
     search_payload: Optional[List[List[Dict[str, Any]]]] = None
     is_loaded: bool = False
     load_calls: int = 0
+    next_item_id: int = 1
 
     def load(self):
         self.load_calls += 1
         self.is_loaded = True
+
+    def _issue_ids(self, count: int) -> List[int]:
+        ids = list(range(self.next_item_id, self.next_item_id + count))
+        self.next_item_id += count
+        return ids
 
     def insert(
         self,
@@ -44,6 +52,7 @@ class FakeIndex:
         n_workers: int = 1,
         timeout_s: float = 86400.0,
         poll_interval_s: float = 1.0,
+        request_ids: Optional[List[str]] = None,
     ) -> List[int]:
         self.inserted.append(
             {
@@ -60,7 +69,25 @@ class FakeIndex:
         )
         if load:
             self.is_loaded = True
-        return [len(self.inserted) + i + 1 for i in range(len(metadata))]
+        if request_ids is not None:
+            request_ids.append(f"req-ins-{len(self.inserted)}")
+        return self._issue_ids(len(metadata))
+
+    def wait_for_insert_stage(
+        self,
+        request_ids: List[str],
+        target_stage: str,
+        timeout_s: float = 600.0,
+        poll_interval_s: float = 1.0,
+        partition_name: Optional[str] = None,
+    ) -> None:
+        self.stage_waits.append(
+            {
+                "request_ids": list(request_ids),
+                "target_stage": target_stage,
+                "partition_name": partition_name,
+            }
+        )
 
     def delete(
         self,
@@ -81,20 +108,53 @@ class FakeIndex:
         )
         return f"req-del-{len(self.deleted)}"
 
-    def update_metadata(
+    def update(
         self,
-        item_ids: List[int],
-        metadata: List[Any],
+        items: List[Any],
+        await_completion: bool = False,
+        timeout_s: float = 600.0,
+        poll_interval_s: float = 1.0,
+        n_workers: int = 1,
         partition_name: Optional[str] = None,
-    ) -> Dict[str, List[int]]:
-        self.metadata_updates.append(
+    ) -> Dict[str, Any]:
+        self.updates.append(
             {
-                "item_ids": list(item_ids),
-                "metadata": list(metadata),
+                "items": list(items),
+                "await_completion": await_completion,
+                "timeout_s": timeout_s,
+                "poll_interval_s": poll_interval_s,
                 "partition_name": partition_name,
             }
         )
-        return {"updated": list(item_ids), "skipped": []}
+        return {
+            "request_id": f"req-upd-{len(self.updates)}",
+            "not_found_item_ids": [],
+        }
+
+    def upsert(
+        self,
+        items: List[Any],
+        await_completion: bool = False,
+        timeout_s: float = 600.0,
+        poll_interval_s: float = 1.0,
+        n_workers: int = 1,
+        partition_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        self.upserts.append(
+            {
+                "items": list(items),
+                "await_completion": await_completion,
+                "timeout_s": timeout_s,
+                "poll_interval_s": poll_interval_s,
+                "partition_name": partition_name,
+            }
+        )
+        inserted = self._issue_ids(sum(1 for it in items if it.item_id is None))
+        return {
+            "request_id": f"req-ups-{len(self.upserts)}",
+            "inserted_item_ids": inserted,
+            "not_found_item_ids": [],
+        }
 
     def create_partition(self, partition_name: str):
         self.partitions.append(partition_name)

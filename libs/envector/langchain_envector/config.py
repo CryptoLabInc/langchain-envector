@@ -33,7 +33,7 @@ class IndexSettings:
     dim: int
     query_encryption: str = "plain"
     index_encryption: str = "cipher"
-    index_type: str = "flat"
+    index_type: str = "FLAT"  # FLAT | IVF_FLAT | IVF_VCT (case-insensitive)
     output_fields: List[str] = field(default_factory=lambda: ["metadata"])
     fetch_k: Optional[int] = None  # over-fetch to support client-side filters
     description: Optional[str] = None
@@ -57,9 +57,12 @@ class WriteSettings:
       batches of 2, 100 and 400. So it stays off.
     - delete: the SDK's own default is to wait, and the wait returned
       immediately in measurement. Left on.
+    - update: the call returns at swap-commit with the rebuilt rows' visibility
+      still pending. Without the wait the updated row was missing from the very
+      next search every time. Left on.
 
-    Set either to ``False`` for fire-and-forget bulk work, then wait once at the
-    end.
+    Set any of these to ``False`` for fire-and-forget bulk work, then wait once
+    at the end.
 
     Only the waiting is configured here. The SDK's per-call tuning knobs
     (``execute_until``, ``n_workers``, ``use_row_insert``, ...) keep their own
@@ -68,6 +71,7 @@ class WriteSettings:
 
     await_insert: bool = False
     await_delete: bool = True
+    await_update: bool = True
 
     # Shared polling budget for the await_* waits above.
     timeout_s: float = 600.0

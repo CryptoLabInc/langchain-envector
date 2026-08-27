@@ -31,7 +31,7 @@ def test_add_texts_returns_item_ids():
 
     # Returned IDs
     assert len(ret_ids) == 2
-    assert ret_ids == [2, 3]
+    assert ret_ids == [1, 2]
 
     # Stored metadata must not contain id
     assert len(client.index.inserted) == 1
@@ -268,7 +268,7 @@ def test_add_documents_returns_item_ids():
     ret_ids = store.add_documents(docs, ids=["user-1", "user-2"])
 
     assert len(ret_ids) == 2
-    assert ret_ids == [2, 3]
+    assert ret_ids == [1, 2]
 
 
 def test_add_documents_requires_vectors_when_no_embeddings():
@@ -288,12 +288,12 @@ def test_delete_passes_item_ids_to_sdk():
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
     ids = store.add_texts(["t1", "t2", "t3"])
-    assert ids == [2, 3, 4]
+    assert ids == [1, 2, 3]
 
     assert store.delete(ids=[ids[0], ids[2]]) is True
     assert len(client.index.deleted) == 1
     call = client.index.deleted[0]
-    assert call["item_ids"] == [2, 4]
+    assert call["item_ids"] == [1, 3]
     # The SDK's own default is to wait for the shard rebuild; 1.5 forced it off
     assert call["await_completion"] is True
 
@@ -386,26 +386,33 @@ def test_delete_forwards_partition_name():
     assert client.index.deleted[0]["partition_name"] == "tenant_a"
 
 
-def test_update_metadata_packs_and_forwards():
+def test_update_metadata_builds_metadata_only_update_items():
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
     ids = store.add_texts(["old"], metadatas=[{"v": 1}])
 
     result = store.update_metadata(ids, ["new"], metadatas=[{"v": 2}])
-    assert result == {"updated": ids, "skipped": []}
+    assert result == {"request_id": ["req-upd-1"], "not_found_item_ids": []}
 
-    call = client.index.metadata_updates[0]
-    assert call["item_ids"] == ids
-    assert '"new"' in call["metadata"][0]
-    assert '"v": 2' in call["metadata"][0]
+    call = client.index.updates[0]
+    assert [it.item_id for it in call["items"]] == ids
+    # Metadata-only: the vector must stay unset so the SDK leaves it in place
+    assert call["items"][0].vector is None
+    assert '"new"' in call["items"][0].metadata
+    assert '"v": 2' in call["items"][0].metadata
     assert call["partition_name"] is None
+    # Updates wait for the rebuilt rows to become searchable by default
+    assert call["await_completion"] is True
 
 
 def test_update_metadata_validates_lengths_and_ids():
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
-    assert store.update_metadata([], []) == {"updated": [], "skipped": []}
+    assert store.update_metadata([], []) == {
+        "request_id": [],
+        "not_found_item_ids": [],
+    }
 
     try:
         store.update_metadata([1, 2], ["only-one"])
@@ -419,21 +426,106 @@ def test_update_metadata_validates_lengths_and_ids():
     except ValueError as e:
         assert "integer item IDs" in str(e)
 
-    assert client.index.metadata_updates == []
+    assert client.index.updates == []
 
 
-def test_update_documents_delegates():
+def test_update_documents_replaces_vector_and_metadata():
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
     ids = store.add_texts(["old"])
 
     docs = [LC_Document(page_content="fresh", metadata={"k": "v"})]
     result = store.update_documents(ids, docs, partition_name="p1")
-    assert result["updated"] == ids
+    assert result["request_id"] == ["req-upd-1"]
+    assert result["not_found_item_ids"] == []
 
-    call = client.index.metadata_updates[0]
-    assert '"fresh"' in call["metadata"][0]
-    assert call["partition_name"] == "p1"
+    item = client.index.updates[0]["items"][0]
+    assert item.item_id == ids[0]
+    # page_content is re-embedded, so the vector is replaced too
+    assert item.vector == FakeEmbeddings(dim=4).embed_documents(["fresh"])[0]
+    assert '"fresh"' in item.metadata
+    assert client.index.updates[0]["partition_name"] == "p1"
+
+
+def test_update_documents_metadata_only_skips_embedding():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=None, client=client)
+    docs = [LC_Document(page_content="fresh", metadata={"k": "v"})]
+
+    # No embeddings configured: vector replacement must be opted out of
+    store.update_documents([7], docs, update_vectors=False)
+    assert client.index.updates[0]["items"][0].vector is None
+
+    try:
+        store.update_documents([7], docs)
+        assert False, "Expected ValueError when a vector update has no embeddings"
+    except ValueError as e:
+        assert "update_vectors=False" in str(e)
+
+
+def test_upsert_documents_routes_by_id_presence():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    docs = [
+        LC_Document(page_content="keep", metadata={}),
+        LC_Document(page_content="new", metadata={}),
+    ]
+    result = store.upsert_documents(docs, ids=[42, None])
+
+    items = client.index.upserts[0]["items"]
+    assert [it.item_id for it in items] == [42, None]
+    # The id-less entry is the only one the server issues an id for
+    assert result["inserted_item_ids"] == [1]
+    assert result["not_found_item_ids"] == []
+
+
+def test_upsert_documents_without_ids_inserts_everything():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    docs = [LC_Document(page_content="a"), LC_Document(page_content="b")]
+    result = store.upsert_documents(docs)
+
+    assert [it.item_id for it in client.index.upserts[0]["items"]] == [None, None]
+    assert result["inserted_item_ids"] == [1, 2]
+
+
+def test_upsert_documents_validates_lengths():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    assert store.upsert_documents([]) == {
+        "request_id": [],
+        "inserted_item_ids": [],
+        "not_found_item_ids": [],
+    }
+
+    try:
+        store.upsert_documents([LC_Document(page_content="a")], ids=[1, 2])
+        assert False, "Expected ValueError for length mismatch"
+    except ValueError as e:
+        assert "equal length" in str(e)
+
+    assert client.index.upserts == []
+
+
+def test_mutation_calls_are_chunked_to_the_sdk_cap():
+    from langchain_envector import vectorstore as vs_mod
+
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    cap = vs_mod.MAX_MUTATION_ITEMS_PER_CALL
+    n = cap + 3
+    ids = list(range(1, n + 1))
+    store.update_metadata(ids, [f"t{i}" for i in ids])
+
+    assert [len(c["items"]) for c in client.index.updates] == [cap, 3]
+    assert (
+        len(client.index.updates[0]["items"]) + len(client.index.updates[1]["items"])
+        == n
+    )
 
 
 def test_partition_management_helpers():
@@ -488,3 +580,52 @@ def test_writes_load_the_index_first():
     store.delete(ids=[1])
     assert index.load_calls == 1
     assert index.is_loaded is True
+
+
+def test_mutation_waits_for_unmerged_inserts_first():
+    # Updating a row whose insert has not merged makes it vanish from search on
+    # a real server, so the merge wait is paid here rather than on every insert.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    ids = store.add_texts(["a"], partition_name="tenant_a")
+    assert client.index.stage_waits == []  # the insert itself never waits
+
+    store.update_metadata(ids, ["b"])
+    wait = client.index.stage_waits[0]
+    assert wait["target_stage"] == "segmentation"
+    assert wait["partition_name"] == "tenant_a"
+    assert wait["request_ids"] == ["req-ins-1"]
+
+    # Drained: a second mutation does not wait again.
+    store.update_metadata(ids, ["c"])
+    assert len(client.index.stage_waits) == 1
+
+
+def test_awaited_inserts_leave_nothing_to_drain():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    ids = store.add_texts(["a"], await_completion=True)
+    store.update_metadata(ids, ["b"])
+    assert client.index.stage_waits == []
+
+
+def test_failed_drain_keeps_the_pending_inserts():
+    class _FailingWait(FakeIndex):
+        def wait_for_insert_stage(self, *args, **kwargs):
+            raise RuntimeError("merge status unavailable")
+
+    client = FakeClient(_FailingWait())
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["a"])
+
+    try:
+        store.update_metadata(ids, ["b"])
+        assert False, "Expected the drain failure to propagate"
+    except RuntimeError as e:
+        assert "merge status unavailable" in str(e)
+
+    # Still pending, so the next mutation retries instead of mutating unmerged rows
+    assert store._pending_inserts
+    assert client.index.updates == []

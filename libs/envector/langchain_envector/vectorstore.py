@@ -1,9 +1,61 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from .config import EnvectorConfig
 from .client import EnvectorClient
 from .types import Embeddings, as_embeddings, pack_metadata, unpack_metadata
+
+
+# pyenvector caps a single update/upsert call at 10_000 items
+# (pyenvector.index.index.MAX_MUTATION_ITEMS_PER_CALL). Larger requests are
+# split here so callers do not have to chunk by hand.
+MAX_MUTATION_ITEMS_PER_CALL = 10000
+
+
+def _mutation_items(item_ids: List[Any], label: str) -> List[int]:
+    """Coerce caller-supplied IDs to the ``int`` item_ids the SDK addresses."""
+    try:
+        return [int(x) for x in item_ids]
+    except (TypeError, ValueError) as e:
+        raise ValueError(
+            f"Envector.{label} expects integer item IDs (or numeric strings) "
+            "as returned by add_texts/add_documents."
+        ) from e
+
+
+def _chunked(items: List[Any], size: int) -> Iterable[List[Any]]:
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def _try_import_item_types():
+    """Return (UpdateItem, UpsertItem), falling back to structural stand-ins.
+
+    The SDK reads these by attribute (`item_id` / `vector` / `metadata`), so the
+    stand-ins are wire-compatible. They exist only so the unit tests, which run
+    against fakes, keep working without the SDK installed — the same reason
+    `_try_import_langchain` shims `Document`.
+    """
+    try:
+        from pyenvector import UpdateItem, UpsertItem  # type: ignore
+
+        return UpdateItem, UpsertItem
+    except Exception:  # pragma: no cover - exercised only without the SDK
+
+        @dataclass
+        class UpdateItem:  # type: ignore[no-redef]
+            item_id: int
+            vector: Optional[List[float]] = None
+            metadata: Optional[Any] = None
+
+        @dataclass
+        class UpsertItem:  # type: ignore[no-redef]
+            item_id: Optional[int] = None
+            vector: Optional[List[float]] = None
+            metadata: Optional[Any] = None
+
+        return UpdateItem, UpsertItem
 
 
 def _try_import_langchain():
@@ -55,6 +107,9 @@ class Envector(VectorStore):  # type: ignore[misc]
         self._embeddings = as_embeddings(embeddings) if embeddings is not None else None
         self.client = client or EnvectorClient(config)
         self.client.init()
+        # Insert request ids whose server-side merge has not been waited for,
+        # keyed by partition. See `_drain_pending_inserts`.
+        self._pending_inserts: Dict[Optional[str], List[str]] = {}
 
     def _loaded_index(self):
         """Return the bound Index, loading it first if the server has not.
@@ -97,6 +152,10 @@ class Envector(VectorStore):  # type: ignore[misc]
         Any other keyword argument goes straight to ``Index.insert``, which is
         where the SDK's own tuning knobs live (``execute_until``, ``n_workers``,
         ``use_row_insert``, ...).
+
+        Notes:
+        - Manual `ids` are ignored: enVector issues its own item IDs. Use the
+          returned IDs with `delete` / `update_documents` / `upsert_documents`.
         """
         if not texts:
             return []
@@ -115,17 +174,21 @@ class Envector(VectorStore):  # type: ignore[misc]
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
 
         w = self.config.write
-        return self.client.index.insert(
+        awaited = w.await_insert if await_completion is None else await_completion
+        request_ids: List[str] = kwargs.pop("request_ids", [])
+        item_ids = self.client.index.insert(
             data=vectors,
             metadata=packed,
             partition_name=partition_name,
-            await_completion=(
-                w.await_insert if await_completion is None else await_completion
-            ),
+            request_ids=request_ids,
+            await_completion=awaited,
             timeout_s=kwargs.pop("timeout_s", w.timeout_s),
             poll_interval_s=kwargs.pop("poll_interval_s", w.poll_interval_s),
             **kwargs,
         )
+        if not awaited and request_ids:
+            self._pending_inserts.setdefault(partition_name, []).extend(request_ids)
+        return item_ids
 
     def delete(
         self,
@@ -171,6 +234,9 @@ class Envector(VectorStore):  # type: ignore[misc]
         )
         return True
 
+    # -------------------------------
+    # In-place mutation (pyenvector >= 1.6.0)
+    # -------------------------------
     def update_metadata(
         self,
         ids: List[Any],
@@ -178,49 +244,276 @@ class Envector(VectorStore):  # type: ignore[misc]
         metadatas: Optional[List[Dict[str, Any]]] = None,
         *,
         partition_name: Optional[str] = None,
+        await_completion: Optional[bool] = None,
+        timeout_s: Optional[float] = None,
+        poll_interval_s: Optional[float] = None,
         **kwargs: Any,
-    ) -> Dict[str, List[int]]:
+    ) -> Dict[str, Any]:
         """Replace the stored text/metadata of existing items by item ID.
 
         Each item's stored payload is replaced wholesale with the packed
         ``{"text": ..., "metadata": ...}`` envelope built from ``texts[i]`` /
         ``metadatas[i]`` — supply the full new content, not a partial patch.
-        Vectors are untouched; to change a vector, delete and re-insert.
+        Vectors are left untouched, so an item keeps matching its original
+        embedding; use `update_documents` to replace the vector as well.
 
-        Returns the SDK result: ``{"updated": [...], "skipped": [...]}`` where
-        skipped IDs were missing or already deleted.
+        Returns the merged SDK result: ``{"request_id": [...],
+        "not_found_item_ids": [...]}``. ``not_found_item_ids`` lists IDs that
+        matched no live row (missing or already deleted) — those are reported,
+        not raised.
         """
         if not ids:
-            return {"updated": [], "skipped": []}
+            return {"request_id": [], "not_found_item_ids": []}
         if len(texts) != len(ids):
             raise ValueError("ids and texts must have equal length")
         if metadatas is None:
             metadatas = [{} for _ in texts]
         if len(metadatas) != len(texts):
             raise ValueError("texts and metadatas must have equal length")
-        try:
-            item_ids = [int(x) for x in ids]
-        except (TypeError, ValueError) as e:
-            raise ValueError(
-                "Envector.update_metadata expects integer item IDs (or numeric "
-                "strings) as returned by add_texts/add_documents."
-            ) from e
+        item_ids = _mutation_items(list(ids), "update_metadata")
 
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
-        return self._loaded_index().update_metadata(
-            item_ids=item_ids, metadata=packed, partition_name=partition_name
+        return self._update_items(
+            [{"item_id": i, "metadata": m} for i, m in zip(item_ids, packed)],
+            partition_name=partition_name,
+            await_completion=await_completion,
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
+            **kwargs,
         )
 
     def update_documents(
         self,
         ids: List[Any],
         documents: List[Document],
+        *,
+        vectors: Optional[List[List[float]]] = None,
+        update_vectors: bool = True,
+        partition_name: Optional[str] = None,
+        await_completion: Optional[bool] = None,
+        timeout_s: Optional[float] = None,
+        poll_interval_s: Optional[float] = None,
         **kwargs: Any,
-    ) -> Dict[str, List[int]]:
-        """Replace existing items' stored content from LangChain Documents."""
+    ) -> Dict[str, Any]:
+        """Replace existing items' vector and stored content from Documents.
+
+        pyenvector >= 1.6 can replace an item's vector in place, so the new
+        `page_content` is re-embedded by default and both the vector and the
+        packed payload are swapped, preserving the item IDs. Pass
+        ``update_vectors=False`` for a metadata-only update, or supply
+        pre-computed `vectors` when this store has no embeddings configured.
+        """
         texts = [getattr(d, "page_content", "") for d in documents]
         metadatas = [getattr(d, "metadata", {}) for d in documents]
-        return self.update_metadata(ids, texts, metadatas, **kwargs)
+
+        if not update_vectors:
+            return self.update_metadata(
+                ids,
+                texts,
+                metadatas,
+                partition_name=partition_name,
+                await_completion=await_completion,
+                timeout_s=timeout_s,
+                poll_interval_s=poll_interval_s,
+                **kwargs,
+            )
+
+        if not ids:
+            return {"request_id": [], "not_found_item_ids": []}
+        if len(texts) != len(ids):
+            raise ValueError("ids and documents must have equal length")
+        if vectors is None:
+            if self._embeddings is None:
+                raise ValueError(
+                    "embeddings is None and vectors not provided; pass `vectors` "
+                    "or use update_vectors=False for a metadata-only update"
+                )
+            vectors = self._embeddings.embed_documents(texts)
+        if len(vectors) != len(ids):
+            raise ValueError("ids and vectors must have equal length")
+
+        item_ids = _mutation_items(list(ids), "update_documents")
+        packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
+        return self._update_items(
+            [
+                {"item_id": i, "vector": v, "metadata": m}
+                for i, v, m in zip(item_ids, vectors, packed)
+            ],
+            partition_name=partition_name,
+            await_completion=await_completion,
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
+            **kwargs,
+        )
+
+    def upsert_documents(
+        self,
+        documents: List[Document],
+        ids: Optional[List[Any]] = None,
+        *,
+        vectors: Optional[List[List[float]]] = None,
+        partition_name: Optional[str] = None,
+        await_completion: Optional[bool] = None,
+        timeout_s: Optional[float] = None,
+        poll_interval_s: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Insert and update Documents in one call (pyenvector >= 1.6.0).
+
+        `ids` is positional against `documents`: an entry that is `None`
+        inserts (enVector issues the item ID), and an entry that carries an
+        existing item ID replaces that item in place. Omit `ids` entirely to
+        insert everything. A caller-chosen ID cannot create a new item — an ID
+        matching no live row comes back in ``not_found_item_ids`` rather than
+        being inserted under that ID.
+
+        Returns the merged SDK result: ``{"request_id": [...],
+        "inserted_item_ids": [...], "not_found_item_ids": [...]}``, where
+        ``inserted_item_ids`` maps positionally onto the ID-less entries.
+        """
+        if not documents:
+            return {
+                "request_id": [],
+                "inserted_item_ids": [],
+                "not_found_item_ids": [],
+            }
+        if ids is not None and len(ids) != len(documents):
+            raise ValueError("ids and documents must have equal length")
+
+        texts = [getattr(d, "page_content", "") for d in documents]
+        metadatas = [getattr(d, "metadata", {}) for d in documents]
+        if vectors is None:
+            if self._embeddings is None:
+                raise ValueError("embeddings is None and vectors not provided")
+            vectors = self._embeddings.embed_documents(texts)
+        if len(vectors) != len(documents):
+            raise ValueError("documents and vectors must have equal length")
+
+        packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
+        raw_ids: List[Optional[Any]] = (
+            list(ids) if ids is not None else [None] * len(documents)
+        )
+        item_ids = [
+            None if x is None else _mutation_items([x], "upsert_documents")[0]
+            for x in raw_ids
+        ]
+
+        specs = [
+            {"item_id": i, "vector": v, "metadata": m}
+            for i, v, m in zip(item_ids, vectors, packed)
+        ]
+        return self._mutate(
+            "upsert",
+            specs,
+            partition_name=partition_name,
+            await_completion=await_completion,
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
+            **kwargs,
+        )
+
+    def _drain_pending_inserts(
+        self,
+        index: Any,
+        timeout_s: Optional[float] = None,
+        poll_interval_s: Optional[float] = None,
+    ) -> None:
+        """Wait for un-awaited inserts to merge before mutating their rows.
+
+        Updating or upserting a row whose insert has not reached the merged
+        stage makes that row disappear from search, even though the call reports
+        success and the index still counts it. Measured on a 1.6 stack: 4 of 6
+        mixed upserts lost the updated row when the insert had not been waited
+        for, 0 of 6 when it had.
+
+        Inserts stay fast because the wait is paid here — once, and only when
+        rows are actually mutated — rather than on every insert. Search and
+        delete are unaffected and need no wait.
+        """
+        if not self._pending_inserts:
+            return
+        w = self.config.write
+        pending = self._pending_inserts
+        self._pending_inserts = {}
+        try:
+            for partition_name, request_ids in pending.items():
+                if not request_ids:
+                    continue
+                index.wait_for_insert_stage(
+                    request_ids=request_ids,
+                    target_stage="segmentation",
+                    timeout_s=w.timeout_s if timeout_s is None else timeout_s,
+                    poll_interval_s=(
+                        w.poll_interval_s
+                        if poll_interval_s is None
+                        else poll_interval_s
+                    ),
+                    partition_name=partition_name,
+                )
+        except Exception:
+            # Not drained: put them back so the next mutation tries again rather
+            # than silently mutating rows that are still unmerged.
+            for partition_name, request_ids in pending.items():
+                self._pending_inserts.setdefault(partition_name, []).extend(request_ids)
+            raise
+
+    def _update_items(
+        self, specs: List[Dict[str, Any]], **kwargs: Any
+    ) -> Dict[str, Any]:
+        return self._mutate("update", specs, **kwargs)
+
+    def _mutate(
+        self,
+        op: str,
+        specs: List[Dict[str, Any]],
+        *,
+        partition_name: Optional[str] = None,
+        await_completion: Optional[bool] = None,
+        timeout_s: Optional[float] = None,
+        poll_interval_s: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Run Index.update/upsert over `specs`, chunked to the SDK per-call cap.
+
+        `specs` are plain dicts so the SDK's UpdateItem/UpsertItem dataclasses
+        are resolved lazily, keeping the module usable without pyenvector.
+
+        Chunks are separate server transactions: if a later chunk fails, the
+        earlier ones stay applied.
+        """
+        update_item, upsert_item = _try_import_item_types()
+        item_cls = update_item if op == "update" else upsert_item
+        index = self._loaded_index()
+        w = self.config.write
+        self._drain_pending_inserts(index, timeout_s, poll_interval_s)
+
+        merged: Dict[str, Any] = {
+            "request_id": [],
+            "inserted_item_ids": [],
+            "not_found_item_ids": [],
+        }
+        for chunk in _chunked(specs, MAX_MUTATION_ITEMS_PER_CALL):
+            result = getattr(index, op)(
+                [item_cls(**spec) for spec in chunk],
+                await_completion=(
+                    w.await_update if await_completion is None else await_completion
+                ),
+                timeout_s=w.timeout_s if timeout_s is None else timeout_s,
+                poll_interval_s=(
+                    w.poll_interval_s if poll_interval_s is None else poll_interval_s
+                ),
+                partition_name=partition_name,
+                **kwargs,
+            )
+            result = result or {}
+            if result.get("request_id"):
+                merged["request_id"].append(result["request_id"])
+            merged["inserted_item_ids"].extend(result.get("inserted_item_ids") or [])
+            merged["not_found_item_ids"].extend(result.get("not_found_item_ids") or [])
+
+        if op == "update":
+            merged.pop("inserted_item_ids")
+        return merged
 
     # -------------------------------
     # Partitions (pyenvector >= 1.5.0)
