@@ -294,7 +294,7 @@ def test_delete_passes_item_ids_to_sdk():
     assert len(client.index.deleted) == 1
     call = client.index.deleted[0]
     assert call["item_ids"] == [1, 3]
-    # The SDK's own default is to wait for the shard rebuild; 1.5 forced it off
+    # Deletes wait for the shard rebuild by default so the next search reflects them
     assert call["await_completion"] is True
 
 
@@ -528,18 +528,16 @@ def test_mutation_calls_are_chunked_to_the_sdk_cap():
     )
 
 
-def test_partition_management_helpers():
+def test_writes_load_the_index_first():
     client = FakeClient()
+    index = client.index
+    assert index.is_loaded is False
+
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
-
-    store.create_partition("p1")
-    store.create_partition("p2")
-    names = [p["name"] for p in store.list_partitions()]
-    assert names == ["p1", "p2"]
-
-    store.drop_partition("p1")
-    names = [p["name"] for p in store.list_partitions()]
-    assert names == ["p2"]
+    # delete/update/search all require a loaded index (1.5 and 1.6 alike)
+    store.delete(ids=[1])
+    assert index.load_calls == 1
+    assert index.is_loaded is True
 
 
 def test_add_texts_does_not_wait_but_can_be_asked_to():
@@ -570,16 +568,116 @@ def test_add_texts_passes_sdk_tuning_knobs_through_kwargs():
     assert call["use_row_insert"] is True
 
 
-def test_writes_load_the_index_first():
+def test_partition_management_helpers():
     client = FakeClient()
-    index = client.index
-    assert index.is_loaded is False
-
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
-    # delete/update/search all require a loaded index (1.5 and 1.6 alike)
-    store.delete(ids=[1])
-    assert index.load_calls == 1
-    assert index.is_loaded is True
+
+    store.create_partition("p1")
+    store.create_partition("p2")
+    names = [p["name"] for p in store.list_partitions()]
+    assert names == ["p1", "p2"]
+
+    store.drop_partition("p1")
+    names = [p["name"] for p in store.list_partitions()]
+    assert names == ["p2"]
+
+
+class _RaisingIndex(FakeIndex):
+    error: Exception = RuntimeError("unset")
+
+    def search(self, *args, **kwargs):
+        raise self.error
+
+
+def test_search_returns_empty_when_the_index_has_no_shards():
+    # Deleting every row leaves no shards, and the backend answers a search with
+    # NotFound instead of an empty result. An emptied store must still search
+    # empty, like a never-populated one.
+    index = _RaisingIndex()
+    index.is_loaded = True
+    index.row_count = 0  # the server agrees the index holds nothing
+    index.error = RuntimeError(
+        "Failed to perform Inner Product: rpc error: code = NotFound desc = "
+        "shard list for index lc_idx is empty | Request ID: abc"
+    )
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+
+    assert store.similarity_search("q", k=2) == []
+    assert store.similarity_search_with_score("q", k=2) == []
+
+
+def test_search_reraises_shard_error_when_the_index_still_has_rows():
+    # The same message over live data must NOT be reported as "no matches":
+    # that would turn a transient backend error into silent data loss.
+    index = _RaisingIndex()
+    index.is_loaded = True
+    index.row_count = 42
+    index.error = RuntimeError(
+        "Failed to perform Inner Product: rpc error: code = NotFound desc = "
+        "shard list for index lc_idx is empty | Request ID: abc"
+    )
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+
+    try:
+        store.similarity_search("q", k=2)
+        assert False, "Expected the error to propagate while rows remain"
+    except RuntimeError as e:
+        assert "shard list for index" in str(e)
+
+
+def test_search_reraises_other_backend_errors():
+    index = _RaisingIndex()
+    index.is_loaded = True
+    index.error = RuntimeError("Inner Product failed: connection reset by peer")
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+
+    try:
+        store.similarity_search("q", k=2)
+        assert False, "Expected the backend error to propagate"
+    except RuntimeError as e:
+        assert "connection reset" in str(e)
+
+
+def test_from_texts_forwards_add_texts_kwargs():
+    # from_texts used to drop everything but texts/metadatas/ids, so a store
+    # without embeddings could not be seeded at all.
+    client = FakeClient()
+    store = Envector.from_texts(
+        ["a", "b"],
+        metadatas=[{"n": 1}, {"n": 2}],
+        embeddings=None,
+        config=_cfg(),
+        client=client,
+        vectors=[[1.0, 0, 0, 0], [0, 1.0, 0, 0]],
+        partition_name="tenant_a",
+        await_completion=False,
+    )
+    call = store.client.index.inserted[0]
+    assert call["data"] == [[1.0, 0, 0, 0], [0, 1.0, 0, 0]]
+    assert call["partition_name"] == "tenant_a"
+    assert call["await_completion"] is False
+
+
+def test_from_documents_forwards_add_texts_kwargs():
+    client = FakeClient()
+    docs = [LC_Document(page_content="a"), LC_Document(page_content="b")]
+    store = Envector.from_documents(
+        docs,
+        embeddings=None,
+        config=_cfg(),
+        client=client,
+        vectors=[[1.0, 0, 0, 0], [0, 1.0, 0, 0]],
+    )
+    assert store.client.index.inserted[0]["data"] == [
+        [1.0, 0, 0, 0],
+        [0, 1.0, 0, 0],
+    ]
 
 
 def test_mutation_waits_for_unmerged_inserts_first():

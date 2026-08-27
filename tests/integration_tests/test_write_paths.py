@@ -195,9 +195,69 @@ def test_delete_accepts_document_ids(store: Envector) -> None:
     assert score is None or score < 0.99
 
 
+def test_search_after_deleting_every_item_is_empty(store: Envector) -> None:
+    # Emptying an index leaves it with no shards, and the backend answers a
+    # search over it with NotFound rather than an empty result. The store
+    # normalises that back to [], matching a never-populated index.
+    vectors = [_unit_vector(0), _unit_vector(1)]
+    ids = store.add_texts(["a", "b"], vectors=vectors)
+
+    assert store.delete(ids) is True
+    assert store.similarity_search_by_vector(vectors[0], k=2) == []
+
+
 def test_delete_of_missing_ids_is_a_noop(store: Envector) -> None:
     ids = store.add_texts(["kept"], vectors=[_unit_vector(0)])
 
     assert store.delete([max(ids) + 999_999]) is True
     assert store.delete([]) is False
     assert store.delete(None) is False
+
+
+class _FixedEmbeddings:
+    """Embeds everything to the same vector: retrieval reduces to "is it wired up"."""
+
+    def embed_documents(self, texts):
+        return [_unit_vector(0) for _ in texts]
+
+    def embed_query(self, text):
+        return _unit_vector(0)
+
+
+def test_as_retriever_reaches_the_server(store: Envector) -> None:
+    # as_retriever is a README entry point with no coverage. The fixture store
+    # has no embeddings (the retriever must embed the query), so build one that
+    # does over the same index.
+    embedded = Envector(config=store.config, embeddings=_FixedEmbeddings())
+    embedded.add_texts(["retrievable"])
+
+    retriever = embedded.as_retriever(search_kwargs={"k": 1})
+    docs = retriever.invoke("anything")
+    assert [d.page_content for d in docs] == ["retrievable"]
+
+
+def test_from_texts_creates_and_populates(store: Envector) -> None:
+    # from_texts needs its own index, and Envector.from_texts takes the config
+    # through kwargs; reuse the fixture's config with a fresh index name.
+    cfg = store.config
+    index_name = f"{cfg.index.index_name}_ft"
+    sub = EnvectorConfig(
+        connection=cfg.connection,
+        key=cfg.key,
+        index=IndexSettings(index_name=index_name, dim=DIM, query_encryption="plain"),
+        create_if_missing=True,
+    )
+    try:
+        created = Envector.from_texts(
+            ["one", "two"],
+            metadatas=[{"n": 1}, {"n": 2}],
+            config=sub,
+            vectors=[_unit_vector(0), _unit_vector(1)],
+        )
+        docs = created.similarity_search_by_vector(_unit_vector(1), k=1)
+        assert [d.page_content for d in docs] == ["two"]
+    finally:
+        try:
+            store.client.ev.drop_index(index_name)
+        except Exception:
+            pass

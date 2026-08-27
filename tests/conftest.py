@@ -19,6 +19,13 @@ class FakeEmbeddings:
 
 @dataclass
 class FakeIndex:
+    """Stand-in for ``pyenvector.Index``, mirroring the 1.6.x signatures.
+
+    Every call is recorded so tests can assert on what the vector store asked
+    the SDK to do. ``is_loaded`` starts False like a freshly created index, so
+    the ``_loaded_index()`` guard is exercised.
+    """
+
     inserted: List[Dict[str, Any]] = field(default_factory=list)
     deleted: List[Dict[str, Any]] = field(default_factory=list)
     updates: List[Dict[str, Any]] = field(default_factory=list)
@@ -30,10 +37,15 @@ class FakeIndex:
     is_loaded: bool = False
     load_calls: int = 0
     next_item_id: int = 1
+    row_count: int = 0
 
     def load(self):
         self.load_calls += 1
         self.is_loaded = True
+
+    @property
+    def indexer(self):
+        return _FakeIndexer(self)
 
     def _issue_ids(self, count: int) -> List[int]:
         ids = list(range(self.next_item_id, self.next_item_id + count))
@@ -71,6 +83,7 @@ class FakeIndex:
             self.is_loaded = True
         if request_ids is not None:
             request_ids.append(f"req-ins-{len(self.inserted)}")
+        self.row_count += len(metadata)
         return self._issue_ids(len(metadata))
 
     def wait_for_insert_stage(
@@ -106,6 +119,7 @@ class FakeIndex:
                 "partition_name": partition_name,
             }
         )
+        self.row_count = max(0, self.row_count - len(item_ids))
         return f"req-del-{len(self.deleted)}"
 
     def update(
@@ -181,11 +195,21 @@ class FakeIndex:
             return self.search_payload
         # Default one-hit result with metadata JSON
         item = {
-            "id": "pos-0",
+            "id": 1,
             "score": 0.9,
             "metadata": json.dumps({"text": "hello", "metadata": {"tag": "x"}}),
         }
         return [[item]]
+
+
+class _FakeIndexer:
+    """Minimal stand-in for the SDK Indexer, for the summary lookups we make."""
+
+    def __init__(self, index: "FakeIndex"):
+        self._index = index
+
+    def get_index_summary(self, index_name: str):
+        return {"index_name": index_name, "row_count": self._index.row_count}
 
 
 class FakeClient:

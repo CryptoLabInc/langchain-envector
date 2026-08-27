@@ -57,6 +57,49 @@ than the `List[str]` LangChain's type hints declare. Callers who need strings
 get them for free from `Document.id`, which pydantic coerces, and `delete`
 accepts both.
 
+
+Standalone repro scripts for the two upstream items below, with the exact
+environment they were measured on, live outside this repo in
+`../lc-envector-audit-minseok/`.
+
+## Upstream: search races the shard bookkeeping when an index is emptied
+
+Reproduced against a 1.6-era stack with the raw SDK, no LangChain involved.
+After deleting every row of an index, a search over it *sometimes* raises
+`InternalError: ... code = NotFound desc = shard list for index <name> is empty`
+instead of returning the empty result a never-populated index returns. It is a
+race whose rate varies between runs: 5 of 8 rounds raised on one run, 2 of 8
+on another.
+
+Measured scope, so the workaround stays as narrow as the problem:
+
+- Partial deletes are consistent — repeated "delete one row, search
+  immediately" rounds returned exactly the remaining row count every time.
+- Deleting everything and inserting again then searching was correct in 6 of 6
+  runs; the error did not appear over live data.
+- `delete(await_completion=True)` does not close the window: the wait returns
+  before the emptied index settles.
+
+`Envector._similarity_search_with_scores` normalises that error to `[]`, but
+only after `_index_is_empty()` confirms with the server that `row_count == 0`.
+The message alone is not enough to act on — reporting "no matches" for a
+transient error over live data would look exactly like data loss. If the server
+cannot answer, the original error is re-raised.
+
+Drop `_is_empty_shard_list_error` / `_index_is_empty` and their unit tests once
+the backend answers a search over an emptied index the same way it answers one
+over a never-populated index.
+
+Repro:
+
+```python
+idx = ev.create_index(name, 32)
+ids = idx.insert([v0, v1], metadata=["a", "b"], await_completion=True)
+idx.load()
+idx.delete(ids, await_completion=True)
+idx.search(v0, top_k=2, output_fields=["metadata"])  # ~60%: InternalError, expected []
+```
+
 ## Upstream: mutating a row whose insert has not merged drops it from search
 
 The most serious of the three, because it is silent. `Index.insert` defaults to
@@ -73,3 +116,22 @@ reach the merged stage before mutating. Inserts stay at ~0.13s and the ~15s
 merge wait is paid once, only when rows are actually mutated. Remove the drain
 once the server either folds the pending merge into the mutation or refuses the
 mutation loudly.
+
+## Upstream: one connection per process
+
+`EnvectorClient.init_connect` delegates to the `Index.init_connect`
+**classmethod**, which disconnects and replaces the process-global
+`Index._default_indexer`. Connecting a second time closes the channel every
+earlier client is still holding, and those clients then fail every call with
+`ValueError: Cannot invoke RPC on closed channel!`.
+
+`langchain_envector.client` works around it by recording what the live
+connection was opened with and adopting it whenever a new store asks for exactly
+the same endpoint (`tests/integration_tests/test_multi_store.py`). The
+workaround only covers stores that share one endpoint. Two stores pointing at
+**different** enVector servers in one process still cannot coexist — the second
+`init_connect` closes the first one's channel — and there is nothing the
+integration can do about that from outside the SDK.
+
+A fix upstream would be to stop treating the indexer as class state, or to let
+`init_connect` return a connection the caller owns.

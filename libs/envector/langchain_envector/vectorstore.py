@@ -6,7 +6,6 @@ from .config import EnvectorConfig
 from .client import EnvectorClient
 from .types import Embeddings, as_embeddings, pack_metadata, unpack_metadata
 
-
 # pyenvector caps a single update/upsert call at 10_000 items
 # (pyenvector.index.index.MAX_MUTATION_ITEMS_PER_CALL). Larger requests are
 # split here so callers do not have to chunk by hand.
@@ -27,6 +26,18 @@ def _mutation_items(item_ids: List[Any], label: str) -> List[int]:
 def _chunked(items: List[Any], size: int) -> Iterable[List[Any]]:
     for start in range(0, len(items), size):
         yield items[start : start + size]
+
+
+def _is_empty_shard_list_error(exc: Exception) -> bool:
+    """True for the backend's "index has no shards" answer to a search.
+
+    Matched on the message rather than the type: the SDK raises a generic
+    ``InternalError`` wrapping the backend's gRPC NotFound, so the type alone
+    would also swallow unrelated server failures. The message alone is not
+    enough to act on either — see `_index_is_empty`.
+    """
+    message = str(exc)
+    return "shard list for index" in message and "is empty" in message
 
 
 def _try_import_item_types():
@@ -111,12 +122,28 @@ class Envector(VectorStore):  # type: ignore[misc]
         # keyed by partition. See `_drain_pending_inserts`.
         self._pending_inserts: Dict[Optional[str], List[str]] = {}
 
+    def _index_is_empty(self) -> bool:
+        """Ask the server whether this index currently holds no rows.
+
+        Used to decide whether an "index has no shards" search error means the
+        index is genuinely empty. Any failure to answer counts as "not known to
+        be empty", so the original error is re-raised rather than swallowed.
+        """
+        try:
+            summary = self.client.index.indexer.get_index_summary(
+                self.config.index.index_name
+            )
+            return int(summary["row_count"]) == 0
+        except Exception:
+            return False
+
     def _loaded_index(self):
         """Return the bound Index, loading it first if the server has not.
 
-        Fresh indexes start unloaded, and the SDK raises
-        ``ValueError("Index not loaded")`` from search as well as from the write
-        paths rather than loading implicitly.
+        Fresh indexes start unloaded, and pyenvector raises
+        ``ValueError("Index not loaded")`` from search, delete, update and
+        upsert rather than loading implicitly. This is not new in 1.6 — the
+        guard is in 1.5 too; the search path just never went through here.
         """
         index = self.client.index
         if not getattr(index, "is_loaded", True):
@@ -207,18 +234,12 @@ class Envector(VectorStore):  # type: ignore[misc]
         and coerced to ``int`` before being passed to the SDK.
 
         Deletion is asynchronous server-side; by default this waits until the
-        affected shards are rebuilt, which is the SDK's own default and returned
-        immediately in measurement. IDs matching no live row are a no-op.
+        affected shards are rebuilt and the remaining data is searchable again
+        (``config.write.await_delete``). IDs matching no live row are a no-op.
         """
         if not ids:
             return False
-        try:
-            item_ids = [int(x) for x in ids]
-        except (TypeError, ValueError) as e:
-            raise ValueError(
-                "Envector.delete expects integer item IDs (or numeric strings) "
-                "as returned by add_texts/add_documents."
-            ) from e
+        item_ids = _mutation_items(list(ids), "delete")
 
         w = self.config.write
         self._loaded_index().delete(
@@ -543,12 +564,23 @@ class Envector(VectorStore):  # type: ignore[misc]
     ) -> List[Tuple[Document, float]]:
         top_k = fetch_k or self.config.index.fetch_k or k
 
-        results = self._loaded_index().search(
-            query=embedding,
-            top_k=top_k,
-            output_fields=self.config.index.output_fields,
-            partition_names=partition_names,
-        )
+        try:
+            results = self._loaded_index().search(
+                query=embedding,
+                top_k=top_k,
+                output_fields=self.config.index.output_fields,
+                partition_names=partition_names,
+            )
+        except Exception as e:  # narrow-matched below, re-raised otherwise
+            # Deleting every row races the backend's shard bookkeeping: a search
+            # in that window answers NotFound instead of the empty result a
+            # never-populated index returns. Normalise the two — but only after
+            # the server confirms the index really holds nothing, so a transient
+            # NotFound over live data surfaces as the error it is instead of
+            # being silently reported as "no matches".
+            if not (_is_empty_shard_list_error(e) and self._index_is_empty()):
+                raise
+            return []
         # pyenvector Index.search returns a list for each query; we passed single query
         result = (
             results[0]
@@ -731,9 +763,13 @@ class Envector(VectorStore):  # type: ignore[misc]
         extracting `page_content` and `metadata` from each Document.
 
         Notes:
-        - Manual `ids` are ignored (EnVector does not support user-provided IDs).
+        - Manual `ids` are ignored: enVector issues its own item IDs, and a
+          caller-chosen ID cannot create a new item. To overwrite existing
+          items, pass their returned IDs to `update_documents` or
+          `upsert_documents`.
         - When `embeddings` is not configured, you must supply `vectors`.
-        - Returns ephemeral IDs as produced by the client insert.
+        - The returned item IDs are durable and addressable: use them with
+          `delete`, `update_documents` and `upsert_documents`.
         """
         texts = [getattr(d, "page_content", "") for d in documents]
         metadatas = [getattr(d, "metadata", {}) for d in documents]
@@ -753,15 +789,20 @@ class Envector(VectorStore):  # type: ignore[misc]
     ) -> "Envector":  # type: ignore[override]
         """Create a store from texts. Requires `config` in kwargs.
 
+        Remaining keyword arguments are forwarded to `add_texts`, so a store
+        with no embeddings can be seeded with pre-computed `vectors`.
+
         Example:
             Envector.from_texts(texts, metadatas=..., embeddings=..., config=cfg)
         """
-        config: Optional[EnvectorConfig] = kwargs.get("config")  # type: ignore
-        client: Optional[EnvectorClient] = kwargs.get("client")  # type: ignore
+        config: Optional[EnvectorConfig] = kwargs.pop("config", None)  # type: ignore
+        client: Optional[EnvectorClient] = kwargs.pop("client", None)  # type: ignore
         if config is None:
             raise ValueError("`config` (EnvectorConfig) is required for from_texts().")
         store = cls(config=config, embeddings=embeddings, client=client)
-        store.add_texts(texts=texts, metadatas=metadatas, ids=ids)
+        # Everything left over belongs to add_texts: `vectors` for a store with
+        # no embeddings, plus partition_name and the write-path overrides.
+        store.add_texts(texts=texts, metadatas=metadatas, ids=ids, **kwargs)
         return store
 
     @classmethod
