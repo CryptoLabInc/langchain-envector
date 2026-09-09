@@ -1,0 +1,39 @@
+name: Claude broad review
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          track_progress: true
+          prompt: |
+            Review this PR's diff. Report only defects you can anchor in evidence.
+
+            Pass 1 — diff-local correctness: bugs, broken invariants, error handling that loses data, security issues.
+
+            Pass 2 — broad review. Read/grep the whole repo, not just the diff, through five lenses:
+            - ac-coverage: a stated requirement (PR body, linked issue, design doc) the code does not deliver
+            - design-conformance: code that contradicts a documented design/spec in this repo
+            - cross-context: an UNCHANGED file whose invariant a changed line breaks
+            - silent-gap: something the design/plan requires that the code omits entirely
+            - threat-model: what an attacker or a bad input does to this change
+
+            Before posting, adversarially verify each candidate: default to rejecting it when uncertain.
+            Do not raise style, taste, "should this be refactored", or a requirement the diff is merely silent on with no source requiring it.
+
+            Post inline comments on the offending lines via `gh pr review --comment`, plus one short summary comment.
+            If nothing survives verification, say so in one line. Never push code.
+          claude_args: '--allowed-tools "Bash(gh pr:*),Bash(git:*),Read,Grep,Glob"'
