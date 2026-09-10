@@ -19,13 +19,13 @@ import json
 from pathlib import Path
 from typing import List
 
-from libs.envector.config import (
+from langchain_envector.config import (
     ConnectionConfig,
     EnvectorConfig,
     IndexSettings,
     KeyConfig,
 )
-from libs.envector.vectorstore import Envector
+from langchain_envector.vectorstore import Envector
 
 
 def batched(seq, n):
@@ -63,7 +63,7 @@ def main():
     cfg = EnvectorConfig(
         connection=ConnectionConfig(address=args.address),
         key=KeyConfig(
-            key_path=args.key_path, key_id=args.key_id, preset="ip", eval_mode="rmp"
+            key_path=args.key_path, key_id=args.key_id, preset="ip3", eval_mode="mms32"
         ),
         index=IndexSettings(
             index_name=args.index_name,
@@ -83,14 +83,16 @@ def main():
             texts.append(rec["text"])  # type: ignore
             metas.append(rec.get("metadata", {}))
 
-    # Insert in batches to respect SDK batch behavior
+    if embeddings is None:
+        # Without embeddings, require manual vectors; here we simply skip.
+        # Users should provide --use-embeddings or adapt to their vector source.
+        raise ValueError(
+            "--use-embeddings is required unless you provide vectors explicitly."
+        )
+
+    # Insert in batches to respect SDK batch behavior. Each batch is searchable
+    # as soon as it returns, so no waiting is needed between batches.
     for t_batch, m_batch in zip(batched(texts, args.batch), batched(metas, args.batch)):
-        if embeddings is None:
-            # Without embeddings, require manual vectors; here we simply skip.
-            # Users should provide --use-embeddings or adapt to their vector source.
-            raise ValueError(
-                "--use-embeddings is required unless you provide vectors explicitly."
-            )
         store.add_texts(t_batch, metadatas=m_batch)
 
     print(f"Inserted {len(texts)} documents into index '{args.index_name}'")

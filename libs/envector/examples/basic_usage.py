@@ -8,13 +8,13 @@ Requirements:
 
 from __future__ import annotations
 
-from libs.envector.config import (
+from langchain_envector.config import (
     ConnectionConfig,
     EnvectorConfig,
     IndexSettings,
     KeyConfig,
 )
-from libs.envector.vectorstore import Envector
+from langchain_envector.vectorstore import Envector
 
 
 def main():
@@ -22,7 +22,7 @@ def main():
     cfg = EnvectorConfig(
         connection=ConnectionConfig(address="localhost:50050"),
         key=KeyConfig(
-            key_path="./keys", key_id="example_key", preset="ip", eval_mode="rmp"
+            key_path="./keys", key_id="example_key", preset="ip3", eval_mode="mms32"
         ),
         index=IndexSettings(index_name="demo", dim=384, query_encryption="plain"),
         create_if_missing=True,
