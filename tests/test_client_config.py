@@ -72,3 +72,65 @@ def test_resolution_is_independent_per_call():
     first = client._resolve_index_params()
     first["index_type"] = "IVF_VCT"
     assert client._resolve_index_params() == {"index_type": "flat"}
+
+
+class _FakeEvClient:
+    def __init__(self):
+        self.indexer = object()
+        self.index_config = None
+
+    def init_connect(self, **kwargs):
+        pass
+
+    def init_index_config(self, **kwargs):
+        self.index_config = kwargs
+
+
+def _init_with_fake_sdk(**index_kwargs) -> dict:
+    """Run init() against a stub SDK and return what it was told about the index.
+
+    No pytest fixtures here: `scripts/run_unit_tests.py` calls test functions
+    with no arguments, so the stubbing is undone by hand instead.
+    """
+    import sys
+    import types
+
+    from langchain_envector import client as client_mod
+
+    ev_client = _FakeEvClient()
+    fake = types.ModuleType("pyenvector")
+    fake.EnvectorClient = lambda: ev_client
+    fake.Index = lambda name: object()
+
+    prev_mod = sys.modules.get("pyenvector")
+    prev_conn = client_mod._ACTIVE_CONNECTION
+    sys.modules["pyenvector"] = fake
+    # A stale global connection would make _connect adopt someone else's indexer.
+    client_mod._ACTIVE_CONNECTION = None
+    try:
+        cfg = EnvectorConfig(
+            connection=ConnectionConfig(address="dummy:0"),
+            key=KeyConfig(key_path="./keys", key_id="kid"),
+            index=IndexSettings(index_name="idx", dim=32, **index_kwargs),
+            create_if_missing=False,
+        )
+        EnvectorClient(cfg).init()
+    finally:
+        client_mod._ACTIVE_CONNECTION = prev_conn
+        if prev_mod is None:
+            del sys.modules["pyenvector"]
+        else:
+            sys.modules["pyenvector"] = prev_mod
+    return ev_client.index_config
+
+
+def test_index_encryption_reaches_the_sdk():
+    # Regression: this was hardcoded to "cipher", so a caller asking for a
+    # plaintext index silently got an encrypted one. The server supports both.
+    sent = _init_with_fake_sdk(index_encryption="plain")
+    assert sent["index_encryption"] == "plain"
+
+
+def test_index_encryption_still_defaults_to_cipher():
+    sent = _init_with_fake_sdk()
+    assert sent["index_encryption"] == "cipher"

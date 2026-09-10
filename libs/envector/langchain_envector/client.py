@@ -158,7 +158,7 @@ class EnvectorClient:
             preset=k.preset,
             eval_mode=k.eval_mode,
             query_encryption=i.query_encryption,
-            index_encryption="cipher",  # server vectors are always encrypted
+            index_encryption=i.index_encryption,
             index_params=index_params,
             auto_key_setup=True,
             description=i.description,
