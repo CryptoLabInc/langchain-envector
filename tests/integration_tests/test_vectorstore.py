@@ -95,39 +95,27 @@ class TestEnvectorVectorStore(VectorStoreIntegrationTests):
             except Exception:
                 pass
 
-    # Capability gaps are marked xfail, but each override still runs the real
-    # standard test through super(), so an XPASS means the gap actually closed.
-    # These four need arbitrary caller-chosen IDs to survive add_documents;
-    # enVector issues its own item IDs and can only update existing ones.
+    # The standard tests that pass caller-chosen ids ("1", "2", ...) run
+    # unmodified: a fresh index issues item IDs from 1, so those ids name the
+    # rows just inserted and the second add_documents updates them in place.
+    # Arbitrary ids (a UUID, a slug) still cannot be created — see README.
+    #
+    # The two delete tests below are xfail for a different reason. Each
+    # override still runs the real standard test through super(), so an XPASS
+    # would mean the server-side behaviour changed.
     @pytest.mark.xfail(
-        reason="arbitrary caller-chosen IDs cannot be created: enVector issues "
-        "its own item IDs, so add_documents(ids=...) only updates existing items."
+        reason="a row deleted moments ago still takes a top-k slot for a few "
+        "seconds after delete() returns; this test searches k=1 immediately."
     )
     def test_deleting_documents(self, vectorstore: VectorStore) -> None:
         super().test_deleting_documents(vectorstore)
 
     @pytest.mark.xfail(
-        reason="arbitrary caller-chosen IDs cannot be created: enVector issues "
-        "its own item IDs, so add_documents(ids=...) only updates existing items."
+        reason="a row deleted moments ago still takes a top-k slot for a few "
+        "seconds after delete() returns; this test searches k=1 immediately."
     )
     def test_deleting_bulk_documents(self, vectorstore: VectorStore) -> None:
         super().test_deleting_bulk_documents(vectorstore)
-
-    @pytest.mark.xfail(
-        reason="arbitrary caller-chosen IDs cannot be created; overwriting works "
-        "only with item IDs the store issued."
-    )
-    def test_add_documents_by_id_with_mutation(self, vectorstore: VectorStore) -> None:
-        super().test_add_documents_by_id_with_mutation(vectorstore)
-
-    @pytest.mark.xfail(
-        reason="arbitrary caller-chosen IDs cannot be created, so adding twice "
-        "under the same caller IDs inserts twice."
-    )
-    def test_add_documents_with_ids_is_idempotent(
-        self, vectorstore: VectorStore
-    ) -> None:
-        super().test_add_documents_with_ids_is_idempotent(vectorstore)
 
     # Async standard tests are not overridden: has_async=False makes the base
     # class skip them.
