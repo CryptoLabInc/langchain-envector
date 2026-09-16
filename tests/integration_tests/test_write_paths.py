@@ -86,7 +86,7 @@ def test_insert_is_searchable_without_sleeping(store: Envector) -> None:
         vectors=vectors,
     )
     assert len(ids) == 3
-    assert all(isinstance(i, int) for i in ids)
+    assert all(isinstance(i, str) and i.isdigit() for i in ids)
 
     # No wait, no sleep: the search must already see all three.
     for pos, (item_id, text) in enumerate(zip(ids, ["alpha", "beta", "gamma"])):
@@ -136,10 +136,10 @@ def test_update_documents_replaces_the_vector(store: Envector) -> None:
 
 def test_update_reports_missing_ids_instead_of_raising(store: Envector) -> None:
     ids = store.add_texts(["kept"], vectors=[_unit_vector(0)])
-    absent = max(ids) + 999_999
+    absent = str(max(int(i) for i in ids) + 999_999)
 
     result = store.update_metadata([absent], ["ignored"])
-    assert absent in result["not_found_item_ids"]
+    assert int(absent) in result["not_found_item_ids"]  # SDK result keeps int IDs
 
 
 def test_upsert_mixes_inserts_and_updates(store: Envector) -> None:
@@ -209,7 +209,7 @@ def test_search_after_deleting_every_item_is_empty(store: Envector) -> None:
 def test_delete_of_missing_ids_is_a_noop(store: Envector) -> None:
     ids = store.add_texts(["kept"], vectors=[_unit_vector(0)])
 
-    assert store.delete([max(ids) + 999_999]) is True
+    assert store.delete([str(max(int(i) for i in ids) + 999_999)]) is True
     assert store.delete([]) is False
     assert store.delete(None) is False
 
