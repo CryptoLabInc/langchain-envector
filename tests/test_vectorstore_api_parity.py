@@ -11,12 +11,10 @@ Scope — the gaps that can be closed inside this package and are still open:
 
 1. ``_select_relevance_score_fn`` → ``similarity_search_with_relevance_scores``
    and ``search_type="similarity_score_threshold"``
-2. the ``embeddings`` property
-3. MMR — ``max_marginal_relevance_search`` and its three siblings
+2. MMR — ``max_marginal_relevance_search`` and its three siblings
 
-(The constructor-signature gap — ``from_texts`` / ``from_documents`` taking
-``embedding`` positionally — has been closed; its tests now live in
-``test_vectorstore.py`` as ordinary regression tests.)
+(The constructor-signature and ``embeddings``-property gaps have been closed;
+their tests now live in ``test_vectorstore.py`` as ordinary regression tests.)
 
 ``get_by_ids`` and native async are deliberately absent: the first needs a wire
 API that addresses rows by item ID (``GetMetadataRequest`` carries only
@@ -66,13 +64,6 @@ xfail_relevance = pytest.mark.xfail(
     raises=NotImplementedError,
     reason="Envector does not define _select_relevance_score_fn, so the "
     "inherited similarity_search_with_relevance_scores raises.",
-)
-
-xfail_embeddings = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="Envector does not override the `embeddings` property; the base "
-    "class returns None even when embeddings were configured.",
 )
 
 xfail_mmr = pytest.mark.xfail(
@@ -252,40 +243,7 @@ async def test_async_relevance_scores_match_sync():
 
 
 # ---------------------------------------------------------------------------
-# 2. `embeddings` property
-# ---------------------------------------------------------------------------
-
-
-@xfail_embeddings
-def test_embeddings_property_exposes_the_configured_embedder():
-    emb = LookupEmbeddings()
-    store = Envector(config=_cfg(), embeddings=emb, client=FakeClient())
-
-    # as_embeddings() returns a protocol-conforming object unchanged, so the
-    # property must hand back the very object that embeds queries.
-    assert store.embeddings is emb
-
-
-def test_embeddings_property_is_none_without_embeddings():
-    # Passes today and must keep passing: a store built for pre-computed
-    # vectors has no embedder to expose.
-    store, _ = _store(with_embeddings=False)
-    assert store.embeddings is None
-
-
-@xfail_embeddings
-def test_retriever_tracing_sees_the_embedding_provider():
-    # VectorStoreRetriever reads `vectorstore.embeddings` to fill the LangSmith
-    # `ls_embedding_provider` field — the first place a None shows up in practice.
-    store, _ = _store()
-
-    params = store.as_retriever()._get_ls_params()
-
-    assert params.get("ls_embedding_provider") == "LookupEmbeddings"
-
-
-# ---------------------------------------------------------------------------
-# 3. MMR
+# 2. MMR
 # ---------------------------------------------------------------------------
 
 

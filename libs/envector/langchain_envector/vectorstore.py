@@ -160,6 +160,12 @@ class Envector(VectorStore):  # type: ignore[misc]
         # keyed by partition. See `_drain_pending_inserts`.
         self._pending_inserts: Dict[Optional[str], List[str]] = {}
 
+    @property
+    def embeddings(self) -> Optional[Embeddings]:
+        """The embedding model used for queries, or ``None`` when the store
+        works with pre-computed vectors only."""
+        return self._embeddings
+
     def _index_is_empty(self) -> bool:
         """Ask the server whether this index currently holds no rows.
 

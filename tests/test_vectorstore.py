@@ -899,3 +899,27 @@ async def test_afrom_texts_and_afrom_documents_go_through_the_inherited_wrappers
     )
     assert isinstance(s2, Envector)
     assert len(c2.index.inserted[0]["metadata"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# `embeddings` property
+# ---------------------------------------------------------------------------
+
+
+def test_embeddings_property_exposes_the_configured_embedder():
+    emb = FakeEmbeddings(dim=4)
+    store = Envector(config=_cfg(), embeddings=emb, client=FakeClient())
+    assert store.embeddings is emb
+
+
+def test_embeddings_property_is_none_without_embeddings():
+    store = Envector(config=_cfg(), embeddings=None, client=FakeClient())
+    assert store.embeddings is None
+
+
+def test_retriever_tracing_sees_the_embedding_provider():
+    # VectorStoreRetriever reads `vectorstore.embeddings` for LangSmith's
+    # ls_embedding_provider — the first consumer that noticed it was None.
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient())
+    params = store.as_retriever()._get_ls_params()
+    assert params.get("ls_embedding_provider") == "FakeEmbeddings"
