@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import math
 import os
 import secrets
 from typing import Generator
 
 import pytest
-from langchain_core.embeddings import DeterministicFakeEmbedding
+from langchain_core.embeddings import DeterministicFakeEmbedding, Embeddings
 from langchain_core.vectorstores import VectorStore
 
 from langchain_tests.integration_tests import VectorStoreIntegrationTests
@@ -28,13 +29,33 @@ def _require_env(name: str) -> str:
     return value
 
 
+class _UnitNorm(Embeddings):
+    """Scale another embedding's vectors to unit length."""
+
+    def __init__(self, inner: Embeddings) -> None:
+        self._inner = inner
+
+    @staticmethod
+    def _unit(v: list[float]) -> list[float]:
+        n = math.sqrt(sum(x * x for x in v)) or 1.0
+        return [x / n for x in v]
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._unit(v) for v in self._inner.embed_documents(texts)]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._unit(self._inner.embed_query(text))
+
+
 class TestEnvectorVectorStore(VectorStoreIntegrationTests):
     # VectorStoreIntegrationTests provides the standard search/add/get scenarios;
     # this class only wires up the Envector fixture and capability flags.
     @staticmethod
-    def get_embeddings() -> DeterministicFakeEmbedding:
-        # Envector requires dimension in [32, 4096].
-        return DeterministicFakeEmbedding(size=32)
+    def get_embeddings() -> Embeddings:
+        # Envector requires dimension in [32, 4096]. Scores are inner products
+        # computed under encryption, which assumes unit-norm vectors; the fake
+        # embedding's raw Gaussian components (up to ~3) rank documents wrongly.
+        return _UnitNorm(DeterministicFakeEmbedding(size=32))
 
     @property
     def has_async(self) -> bool:
