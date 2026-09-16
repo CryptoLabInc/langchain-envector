@@ -756,7 +756,9 @@ def test_drain_uses_its_own_timeout_budget():
 
 def test_add_documents_with_item_ids_updates_in_place():
     index = FakeIndex()
-    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index))
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
     first = store.add_texts(["v1", "w1"])  # -> [1, 2]
 
     docs = [
@@ -778,7 +780,9 @@ def test_add_documents_reuses_the_ids_search_results_carry():
     # Base-class behaviour: with no ids kwarg, Documents that carry an `id`
     # supply it. Re-adding a search hit must therefore overwrite, not duplicate.
     index = FakeIndex()
-    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index))
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
     store.add_texts(["hello"])  # -> [1]
 
     hit = store.similarity_search("q", k=1)[0]  # FakeIndex returns id 1
@@ -794,10 +798,14 @@ def test_add_documents_reuses_the_ids_search_results_carry():
 
 def test_add_texts_mixed_ids_insert_none_slots_and_update_the_rest():
     index = FakeIndex()
-    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index))
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
     existing = store.add_texts(["old"])  # -> [1]
 
-    ret = store.add_texts(["new-a", "old-edited", "new-b"], ids=[None, existing[0], None])
+    ret = store.add_texts(
+        ["new-a", "old-edited", "new-b"], ids=[None, existing[0], None]
+    )
 
     # None slots were inserted (server-issued 2, 3 in order), the ID slot updated.
     assert ret == [2, 1, 3]
@@ -809,11 +817,15 @@ def test_add_texts_ids_naming_no_live_row_are_inserted_with_a_warning():
     class _NotFoundIndex(FakeIndex):
         def upsert(self, items, **kw):
             result = super().upsert(items, **kw)
-            result["not_found_item_ids"] = [it.item_id for it in items if it.item_id == 99]
+            result["not_found_item_ids"] = [
+                it.item_id for it in items if it.item_id == 99
+            ]
             return result
 
     index = _NotFoundIndex()
-    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index))
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
     live = store.add_texts(["live"])  # -> [1]
 
     with pytest.warns(UserWarning, match="match no live row"):
@@ -826,7 +838,9 @@ def test_add_texts_ids_naming_no_live_row_are_inserted_with_a_warning():
 
 
 def test_add_texts_rejects_ids_of_the_wrong_length():
-    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient())
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient()
+    )
     with pytest.raises(ValueError, match="equal length"):
         store.add_texts(["a", "b"], ids=[1])
 
@@ -879,7 +893,11 @@ def test_from_texts_explains_the_old_positional_metadatas_shape():
     # `metadatas`. That call shape now fails with a message that says so.
     with pytest.raises(TypeError, match="metadatas by keyword"):
         Envector.from_texts(
-            ["A"], [{"m": 1}], embeddings=FakeEmbeddings(dim=4), config=_cfg(), client=FakeClient()
+            ["A"],
+            [{"m": 1}],
+            embeddings=FakeEmbeddings(dim=4),
+            config=_cfg(),
+            client=FakeClient(),
         )
 
 
@@ -889,7 +907,9 @@ async def test_afrom_texts_and_afrom_documents_go_through_the_inherited_wrappers
     emb = FakeEmbeddings(dim=4)
 
     c1 = FakeClient()
-    s1 = await Envector.afrom_texts(["A", "B"], emb, [{"m": 1}, {"m": 2}], config=_cfg(), client=c1)
+    s1 = await Envector.afrom_texts(
+        ["A", "B"], emb, [{"m": 1}, {"m": 2}], config=_cfg(), client=c1
+    )
     assert isinstance(s1, Envector)
     assert len(c1.index.inserted[0]["metadata"]) == 2
 
@@ -920,6 +940,8 @@ def test_embeddings_property_is_none_without_embeddings():
 def test_retriever_tracing_sees_the_embedding_provider():
     # VectorStoreRetriever reads `vectorstore.embeddings` for LangSmith's
     # ls_embedding_provider — the first consumer that noticed it was None.
-    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient())
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient()
+    )
     params = store.as_retriever()._get_ls_params()
     assert params.get("ls_embedding_provider") == "FakeEmbeddings"

@@ -49,7 +49,11 @@ def _split_caller_ids(ids: List[Any]) -> Tuple[List[Optional[int]], List[Any]]:
 def _one_embedding_arg(embedding: Any, embeddings: Any) -> Any:
     """Resolve the standard positional ``embedding`` and our older
     ``embeddings=`` keyword into one value, rejecting conflicting pairs."""
-    if isinstance(embedding, (list, tuple)) and embedding and isinstance(embedding[0], dict):
+    if (
+        isinstance(embedding, (list, tuple))
+        and embedding
+        and isinstance(embedding[0], dict)
+    ):
         # The second positional argument used to be `metadatas`. Catch the old
         # call shape here rather than failing deeper inside as_embeddings().
         raise TypeError(

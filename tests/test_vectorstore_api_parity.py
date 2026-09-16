@@ -114,9 +114,7 @@ class ScoringFakeIndex(FakeIndex):
     ):
         self.searched.append({"top_k": top_k, "partition_names": partition_names})
         texts = list(self.corpus)
-        ranked = sorted(
-            texts, key=lambda t: _dot(query, self.corpus[t]), reverse=True
-        )
+        ranked = sorted(texts, key=lambda t: _dot(query, self.corpus[t]), reverse=True)
         hits: List[Dict[str, Any]] = [
             {
                 "id": texts.index(t) + 1,
@@ -322,7 +320,9 @@ def test_retriever_with_mmr_returns_documents():
 async def test_async_mmr_matches_sync():
     store, _ = _store()
 
-    sync_docs = store.max_marginal_relevance_search("q", k=2, fetch_k=5, lambda_mult=0.0)
+    sync_docs = store.max_marginal_relevance_search(
+        "q", k=2, fetch_k=5, lambda_mult=0.0
+    )
     async_docs = await store.amax_marginal_relevance_search(
         "q", k=2, fetch_k=5, lambda_mult=0.0
     )
