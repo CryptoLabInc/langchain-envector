@@ -128,7 +128,7 @@ def test_update_documents_replaces_the_vector(store: Envector) -> None:
     doc, score = _top1(store, new_vector)
     assert score > 0.99
     assert doc.page_content == "new"
-    assert doc.metadata["_id"] == ids[0]
+    assert str(doc.metadata["_id"]) == ids[0]  # `_id` is the raw server id
     # ...and the replaced vector no longer has a near-1 match.
     _, old_score = _top1(store, old_vector)
     assert old_score is None or old_score < 0.99
