@@ -41,14 +41,12 @@ Key dataclasses live in `libs/envector/config.py`:
 - Client-side filtering requires the JSON envelope to include an object under `metadata`.
 
 ## Limitations
-- Caller-chosen IDs on insert are honoured only when they are enVector item IDs. `add_texts(ids=...)` / `add_documents(ids=...)` (and Documents that carry an `id`, as search results do) **update those items in place**; an ID that names no live row, or any non-integer ID (a UUID, a slug), cannot be created — enVector issues its own `item_id` values and has no insert-at-ID — so the row is inserted with a server-issued ID and a `UserWarning` says so. The returned list always holds the IDs really in the index. LangChain's indexing API (`langchain_core.indexing.index`), which relies on its own hash IDs surviving, is therefore not supported.
-- Fetch-by-ID (`get_by_ids`) is unsupported.
-- Filtering happens client-side, after the server has returned `k` hits, so `similarity_search(k=4, filter=...)` returns **fewer than `k`** whenever some of those hits are filtered out. Pass `fetch_k` (or set `IndexSettings.fetch_k`) to over-fetch — with `fetch_k=10` the same query returned the full 4.
-- Multi-key indexes and cloud key stores (`aws` / `gcp` / `vault`) are not supported yet; keys are read from local files (`KeyConfig`) or from KMS (`ConnectionConfig.kms_address`).
-- One enVector endpoint per process. `pyenvector` keeps a single process-wide connection, so several stores can coexist only while they all point at the same endpoint; the integration reuses that connection for them. Two stores pointing at **different** servers in one process is not supported — the second connection closes the first one's channel.
-- `update_documents` / `upsert_documents` calls larger than 10,000 items are split into several server transactions. If a later chunk fails, the earlier ones stay applied.
-- The first `update_documents` / `upsert_documents` after un-awaited `add_texts` calls blocks until those inserts have merged, because mutating an unmerged row drops it from search. The wait grows with the number of un-awaited batches (the server merges them one at a time: ~15s for one, ~125s for twenty), so it has its own `WriteSettings.drain_timeout_s`. Inserts themselves stay fast, search and delete never wait, and `await_insert=True` moves the cost back into ingestion if you interleave writing and updating.
-- Pending inserts are tracked per store instance. If one store adds documents without waiting and a *different* store instance updates those same rows, the second one has nothing to drain — use one store per index, or `await_insert=True`.
+- Item IDs are issued by the server; use the IDs returned by `add_texts` / `add_documents` with `delete`, `update_documents`, `upsert_documents`, or pass them back as `ids` to update in place. Other IDs cannot be created — such rows get server-issued IDs and a `UserWarning`.
+- Fetch-by-ID (`get_by_ids`) is unsupported, and so is LangChain's `indexing` API, which depends on its own IDs.
+- Filtering happens client-side after the server returns `k` hits, so filtered results can be fewer than `k`; set `fetch_k` (or `IndexSettings.fetch_k`) to over-fetch.
+- One enVector endpoint per process; all stores in a process must point at the same server.
+- Updates wait for that store's pending inserts to merge first; when interleaving inserts and updates, set `WriteSettings.await_insert=True` and use one store instance per index.
+- `update_documents` / `upsert_documents` above 10,000 items are sent in several batches; if a later batch fails, the earlier ones stay applied.
 
 ## Examples
 ### Configuration
