@@ -44,6 +44,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - Item IDs are issued by the server; use the IDs returned by `add_texts` / `add_documents` with `delete`, `update_documents`, `upsert_documents`, or pass them back as `ids` to update in place. Other IDs cannot be created — such rows get server-issued IDs and a `UserWarning`.
 - Fetch-by-ID (`get_by_ids`) is unsupported, and so is LangChain's `indexing` API, which depends on its own IDs.
 - Embeddings must be unit norm: scores are inner products computed under encryption, and vectors with components outside [-1, 1] rank incorrectly.
+- A row deleted moments ago can still take a top-k slot briefly, so a search right after `delete` may return fewer than `k`; pass `fetch_k` to over-fetch.
 - Filtering happens client-side after the server returns `k` hits, so filtered results can be fewer than `k`; set `fetch_k` (or `IndexSettings.fetch_k`) to over-fetch.
 - One enVector endpoint per process; all stores in a process must point at the same server.
 - Updates wait for that store's pending inserts to merge first; when interleaving inserts and updates, set `WriteSettings.await_insert=True` and use one store instance per index.
