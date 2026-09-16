@@ -1,27 +1,43 @@
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+from langchain_core.documents import Document
+from langchain_core.vectorstores import VectorStore
+from pyenvector import UpdateItem, UpsertItem
+from pyenvector.index.index import MAX_MUTATION_ITEMS_PER_CALL
+
 from .config import EnvectorConfig
 from .client import EnvectorClient
 from .types import Embeddings, as_embeddings, pack_metadata, unpack_metadata
 
-# pyenvector caps a single update/upsert call at 10_000 items
-# (pyenvector.index.index.MAX_MUTATION_ITEMS_PER_CALL). Larger requests are
-# split here so callers do not have to chunk by hand.
-MAX_MUTATION_ITEMS_PER_CALL = 10000
 
+def _mutation_items(
+    item_ids: List[Any], label: str, *, dedupe: bool = False
+) -> List[int]:
+    """Coerce caller-supplied IDs to the ``int`` item_ids the SDK addresses.
 
-def _mutation_items(item_ids: List[Any], label: str) -> List[int]:
-    """Coerce caller-supplied IDs to the ``int`` item_ids the SDK addresses."""
+    The SDK rejects non-positive and repeated ids with its own message; both
+    are caught here and named after the calling method. ``dedupe=True``
+    (delete) drops repeats instead, since deleting a row twice is deleting it.
+    """
     try:
-        return [int(x) for x in item_ids]
+        ints = [int(x) for x in item_ids]
     except (TypeError, ValueError) as e:
         raise ValueError(
             f"Envector.{label} expects integer item IDs (or numeric strings) "
             "as returned by add_texts/add_documents."
         ) from e
+    if any(i <= 0 for i in ints):
+        raise ValueError(
+            f"Envector.{label}: item IDs are positive integers (got {min(ints)})."
+        )
+    if dedupe:
+        return list(dict.fromkeys(ints))
+    if len(set(ints)) != len(ints):
+        raise ValueError(f"Envector.{label}: item IDs must be unique within one call.")
+    return ints
 
 
 def _split_caller_ids(ids: List[Any]) -> Tuple[List[Optional[int]], List[Any]]:
@@ -39,10 +55,14 @@ def _split_caller_ids(ids: List[Any]) -> Tuple[List[Optional[int]], List[Any]]:
             item_ids.append(None)
             continue
         try:
-            item_ids.append(int(x))
+            value = int(x)
         except (TypeError, ValueError):
+            value = 0
+        if value <= 0:  # the server issues positive ints only
             item_ids.append(None)
             foreign.append(x)
+        else:
+            item_ids.append(value)
     return item_ids, foreign
 
 
@@ -82,71 +102,12 @@ def _is_empty_shard_list_error(exc: Exception) -> bool:
     return "shard list for index" in message and "is empty" in message
 
 
-def _try_import_item_types():
-    """Return (UpdateItem, UpsertItem), falling back to structural stand-ins.
-
-    The SDK reads these by attribute (`item_id` / `vector` / `metadata`), so the
-    stand-ins are wire-compatible. They exist only so the unit tests, which run
-    against fakes, keep working without the SDK installed — the same reason
-    `_try_import_langchain` shims `Document`.
-    """
-    try:
-        from pyenvector import UpdateItem, UpsertItem  # type: ignore
-
-        return UpdateItem, UpsertItem
-    except ImportError:  # pragma: no cover - exercised only without the SDK
-
-        @dataclass
-        class UpdateItem:  # type: ignore[no-redef]
-            item_id: int
-            vector: Optional[List[float]] = None
-            metadata: Optional[Any] = None
-
-        @dataclass
-        class UpsertItem:  # type: ignore[no-redef]
-            item_id: Optional[int] = None
-            vector: Optional[List[float]] = None
-            metadata: Optional[Any] = None
-
-        return UpdateItem, UpsertItem
-
-
-def _try_import_langchain():
-    """Return (VectorStoreBase, DocumentClass) with safe fallbacks.
-
-    Ensures we always return a valid base class even if LangChain is missing.
-    """
-    VectorStoreBase: Any = object
-
-    try:
-        from langchain_core.documents import Document  # type: ignore
-    except Exception:  # pragma: no cover - optional dependency
-        # Minimal shim if LangChain is not installed
-        class Document:  # type: ignore
-            def __init__(
-                self, page_content: str, metadata: Optional[Dict[str, Any]] = None
-            ):
-                self.page_content = page_content
-                self.metadata = metadata or {}
-
-    try:
-        from langchain_core.vectorstores import VectorStore as _VectorStore  # type: ignore
-
-        VectorStoreBase = _VectorStore
-    except Exception:  # pragma: no cover - optional dependency
-        pass
-
-    return VectorStoreBase, Document
-
-
-VectorStore, Document = _try_import_langchain()
-
-
-class Envector(VectorStore):  # type: ignore[misc]
+class Envector(VectorStore):
     """LangChain-compatible VectorStore adaptor for Envector.
 
-    This class wraps the high-level `pyenvector` SDK. It does not use low-level
-    gRPC stubs or `pyenvector.api.Indexer` directly.
+    This class wraps the high-level `pyenvector` SDK (`EnvectorClient`, `Index`).
+    The one place the package reads below that surface is `client.py`, which
+    reuses the SDK's process-wide connection across stores.
     """
 
     def __init__(
@@ -178,9 +139,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         be empty", so the original error is re-raised rather than swallowed.
         """
         try:
-            summary = self.client.index.indexer.get_index_summary(
-                self.config.index.index_name
-            )
+            summary = self.client.index.summary()
             return int(summary["row_count"]) == 0
         except Exception:
             return False
@@ -219,7 +178,8 @@ class Envector(VectorStore):  # type: ignore[misc]
         are searchable when the call returns; ``await_completion=True`` also
         waits for the server to merge and save them (default
         ``config.write.await_insert``). Other keyword arguments go to
-        ``Index.insert``.
+        ``Index.insert`` and apply to the rows this call inserts; the upsert
+        arm below takes only ``timeout_s`` / ``poll_interval_s``.
 
         ``ids`` follows LangChain's add-or-update contract as far as enVector
         allows: an entry that is an item ID (int or numeric str, such as the
@@ -243,6 +203,11 @@ class Envector(VectorStore):  # type: ignore[misc]
                 raise ValueError("embeddings is None and vectors not provided")
             vectors = self._embeddings.embed_documents(texts)
 
+        # The SDK waits up to a day for an insert; WriteSettings.timeout_s is
+        # sized for delete/update and is not applied here unless passed in.
+        timeout_s = kwargs.pop("timeout_s", None)
+        poll_interval_s = kwargs.pop("poll_interval_s", None)
+
         if ids is not None:
             if len(ids) != len(texts):
                 raise ValueError("texts and ids must have equal length")
@@ -264,7 +229,9 @@ class Envector(VectorStore):  # type: ignore[misc]
                     vectors=vectors,
                     partition_name=partition_name,
                     await_completion=await_completion,
-                    **kwargs,
+                    timeout_s=timeout_s,
+                    poll_interval_s=poll_interval_s,
+                    insert_kwargs=kwargs,
                 )
 
         # Prepare metadata JSON strings per item
@@ -273,17 +240,24 @@ class Envector(VectorStore):  # type: ignore[misc]
         w = self.config.write
         awaited = w.await_insert if await_completion is None else await_completion
         request_ids: List[str] = kwargs.pop("request_ids", [])
+        waits: Dict[str, Any] = {}
+        if timeout_s is not None:
+            waits["timeout_s"] = timeout_s
+        if poll_interval_s is not None:
+            waits["poll_interval_s"] = poll_interval_s
         item_ids = self.client.index.insert(
             data=vectors,
             metadata=packed,
             partition_name=partition_name,
             request_ids=request_ids,
             await_completion=awaited,
-            timeout_s=kwargs.pop("timeout_s", w.timeout_s),
-            poll_interval_s=kwargs.pop("poll_interval_s", w.poll_interval_s),
+            **waits,
             **kwargs,
         )
-        if not awaited and request_ids:
+        # Only a merge can be waited for later, and ``execute_until="flush"``
+        # stops before one is submitted.
+        merging = kwargs.get("execute_until", "segmentation") == "segmentation"
+        if not awaited and request_ids and merging:
             self._pending_inserts.setdefault(partition_name, []).extend(request_ids)
         return [str(i) for i in item_ids]
 
@@ -296,7 +270,9 @@ class Envector(VectorStore):  # type: ignore[misc]
         vectors: List[List[float]],
         partition_name: Optional[str],
         await_completion: Optional[bool],
-        **kwargs: Any,
+        timeout_s: Optional[float],
+        poll_interval_s: Optional[float],
+        insert_kwargs: Dict[str, Any],
     ) -> List[str]:
         """`add_texts` when some entries name existing item IDs.
 
@@ -313,7 +289,8 @@ class Envector(VectorStore):  # type: ignore[misc]
             vectors=vectors,
             partition_name=partition_name,
             await_completion=await_completion,
-            **kwargs,
+            timeout_s=timeout_s,
+            poll_interval_s=poll_interval_s,
         )
         inserted = iter(result.get("inserted_item_ids") or [])
         out: List[str] = [str(next(inserted) if i is None else i) for i in item_ids]
@@ -335,6 +312,9 @@ class Envector(VectorStore):  # type: ignore[misc]
                 vectors=[vectors[k] for k in pos],
                 partition_name=partition_name,
                 await_completion=await_completion,
+                timeout_s=timeout_s,
+                poll_interval_s=poll_interval_s,
+                **insert_kwargs,
             )
             for k, nid in zip(pos, new_ids):
                 out[k] = nid
@@ -362,7 +342,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         """
         if not ids:
             return False
-        item_ids = _mutation_items(list(ids), "delete")
+        item_ids = _mutation_items(ids, "delete", dedupe=True)
 
         w = self.config.write
         self._loaded_index().delete(
@@ -537,10 +517,10 @@ class Envector(VectorStore):  # type: ignore[misc]
         raw_ids: List[Optional[Any]] = (
             list(ids) if ids is not None else [None] * len(documents)
         )
-        item_ids = [
-            None if x is None else _mutation_items([x], "upsert_documents")[0]
-            for x in raw_ids
-        ]
+        present = iter(
+            _mutation_items([x for x in raw_ids if x is not None], "upsert_documents")
+        )
+        item_ids = [None if x is None else next(present) for x in raw_ids]
 
         specs = [
             {"item_id": i, "vector": v, "metadata": m}
@@ -557,45 +537,33 @@ class Envector(VectorStore):  # type: ignore[misc]
         )
 
     def _drain_pending_inserts(
-        self,
-        index: Any,
-        timeout_s: Optional[float] = None,
-        poll_interval_s: Optional[float] = None,
+        self, index: Any, partition_name: Optional[str] = None
     ) -> None:
-        """Wait for un-awaited inserts to merge before mutating their rows.
+        """Wait for a partition's un-awaited inserts to merge before mutating its rows.
 
         Updating a row whose insert has not merged yet drops it from search
         while the call still reports success, so the wait is paid here — once,
-        and only when rows are mutated — rather than on every insert. It uses
-        ``config.write.drain_timeout_s`` because it grows with the number of
-        pending batches. Timing out raises and keeps the pending ids, so
-        nothing is mutated until a retry drains them.
+        and only when rows are mutated — rather than on every insert. Updates
+        and deletes only reach rows of the partition they name (the default
+        one when none is named), so only that partition's inserts are waited
+        for. The wait uses ``config.write.drain_timeout_s`` because it grows
+        with the number of pending batches. Timing out raises and keeps the
+        pending ids, so nothing is mutated until a retry drains them.
         """
-        if not self._pending_inserts:
+        request_ids = self._pending_inserts.pop(partition_name, None)
+        if not request_ids:
             return
         w = self.config.write
-        pending = self._pending_inserts
-        self._pending_inserts = {}
         try:
-            for partition_name, request_ids in pending.items():
-                if not request_ids:
-                    continue
-                index.wait_for_insert_stage(
-                    request_ids=request_ids,
-                    target_stage="segmentation",
-                    timeout_s=w.drain_timeout_s if timeout_s is None else timeout_s,
-                    poll_interval_s=(
-                        w.poll_interval_s
-                        if poll_interval_s is None
-                        else poll_interval_s
-                    ),
-                    partition_name=partition_name,
-                )
+            index.wait_for_insert_stage(
+                request_ids=request_ids,
+                target_stage="segmentation",
+                timeout_s=w.drain_timeout_s,
+                poll_interval_s=w.poll_interval_s,
+                partition_name=partition_name,
+            )
         except Exception:
-            # Not drained: put them back so the next mutation tries again rather
-            # than silently mutating rows that are still unmerged.
-            for partition_name, request_ids in pending.items():
-                self._pending_inserts.setdefault(partition_name, []).extend(request_ids)
+            self._pending_inserts.setdefault(partition_name, []).extend(request_ids)
             raise
 
     def _update_items(
@@ -622,11 +590,11 @@ class Envector(VectorStore):  # type: ignore[misc]
         Chunks are separate server transactions: if a later chunk fails, the
         earlier ones stay applied.
         """
-        update_item, upsert_item = _try_import_item_types()
-        item_cls = update_item if op == "update" else upsert_item
+        item_cls = UpdateItem if op == "update" else UpsertItem
         index = self._loaded_index()
         w = self.config.write
-        self._drain_pending_inserts(index, timeout_s, poll_interval_s)
+        awaited = w.await_update if await_completion is None else await_completion
+        self._drain_pending_inserts(index, partition_name)
 
         merged: Dict[str, Any] = {
             "request_id": [],
@@ -636,9 +604,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         for chunk in _chunked(specs, MAX_MUTATION_ITEMS_PER_CALL):
             result = getattr(index, op)(
                 [item_cls(**spec) for spec in chunk],
-                await_completion=(
-                    w.await_update if await_completion is None else await_completion
-                ),
+                await_completion=awaited,
                 timeout_s=w.timeout_s if timeout_s is None else timeout_s,
                 poll_interval_s=(
                     w.poll_interval_s if poll_interval_s is None else poll_interval_s
@@ -651,6 +617,12 @@ class Envector(VectorStore):  # type: ignore[misc]
                 merged["request_id"].append(result["request_id"])
             merged["inserted_item_ids"].extend(result.get("inserted_item_ids") or [])
             merged["not_found_item_ids"].extend(result.get("not_found_item_ids") or [])
+            if op == "upsert" and not awaited and result.get("insert_request_id"):
+                # Rows the upsert inserted merge like any other insert; queue
+                # them so a following update does not catch them unmerged.
+                self._pending_inserts.setdefault(partition_name, []).append(
+                    result["insert_request_id"]
+                )
 
         if op == "update":
             merged.pop("inserted_item_ids")
@@ -942,6 +914,10 @@ class Envector(VectorStore):  # type: ignore[misc]
     ) -> "Envector":  # type: ignore[override]
         """Create a store from Documents. Same argument shape as `from_texts`."""
         embedding = _one_embedding_arg(embedding, embeddings)
+        if "ids" not in kwargs:
+            doc_ids = [getattr(d, "id", None) for d in documents]
+            if any(doc_ids):
+                kwargs["ids"] = doc_ids
         texts = [d.page_content for d in documents]
         metadatas = [getattr(d, "metadata", {}) for d in documents]
         return cls.from_texts(texts, embedding, metadatas=metadatas, **kwargs)

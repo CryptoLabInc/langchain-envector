@@ -47,6 +47,9 @@ class FakeIndex:
     def indexer(self):
         return _FakeIndexer(self)
 
+    def summary(self):
+        return {"row_count": self.row_count}
+
     def _issue_ids(self, count: int) -> List[int]:
         ids = list(range(self.next_item_id, self.next_item_id + count))
         self.next_item_id += count
@@ -165,10 +168,17 @@ class FakeIndex:
             }
         )
         inserted = self._issue_ids(sum(1 for it in items if it.item_id is None))
+        n = len(self.upserts)
         return {
-            "request_id": f"req-ups-{len(self.upserts)}",
+            "request_id": f"req-ups-{n}",
             "inserted_item_ids": inserted,
             "not_found_item_ids": [],
+            "update_request_id": (
+                f"req-ups-{n}-upd"
+                if any(it.item_id is not None for it in items)
+                else None
+            ),
+            "insert_request_id": f"req-ups-{n}-ins" if inserted else None,
         }
 
     def create_partition(self, partition_name: str):

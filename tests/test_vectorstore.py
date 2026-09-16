@@ -553,10 +553,13 @@ def test_add_texts_does_not_wait_but_can_be_asked_to():
     store.add_texts(["t1"])
     call = client.index.inserted[0]
     assert call["await_completion"] is False
-    assert call["timeout_s"] == store.config.write.timeout_s
+    # WriteSettings.timeout_s is sized for delete/update; an insert keeps the
+    # SDK's own day-long budget unless the caller passes one.
+    assert call["timeout_s"] == 86400.0
 
-    store.add_texts(["t2"], await_completion=True)
+    store.add_texts(["t2"], await_completion=True, timeout_s=30)
     assert client.index.inserted[1]["await_completion"] is True
+    assert client.index.inserted[1]["timeout_s"] == 30
 
 
 def test_add_texts_passes_sdk_tuning_knobs_through_kwargs():
@@ -693,14 +696,15 @@ def test_mutation_waits_for_unmerged_inserts_first():
     ids = store.add_texts(["a"], partition_name="tenant_a")
     assert client.index.stage_waits == []  # the insert itself never waits
 
-    store.update_metadata(ids, ["b"])
+    # Updates only reach rows of the partition they name, so the update names it.
+    store.update_metadata(ids, ["b"], partition_name="tenant_a")
     wait = client.index.stage_waits[0]
     assert wait["target_stage"] == "segmentation"
     assert wait["partition_name"] == "tenant_a"
     assert wait["request_ids"] == ["req-ins-1"]
 
     # Drained: a second mutation does not wait again.
-    store.update_metadata(ids, ["c"])
+    store.update_metadata(ids, ["c"], partition_name="tenant_a")
     assert len(client.index.stage_waits) == 1
 
 
@@ -945,3 +949,131 @@ def test_retriever_tracing_sees_the_embedding_provider():
     )
     params = store.as_retriever()._get_ls_params()
     assert params.get("ls_embedding_provider") == "FakeEmbeddings"
+
+
+# ---------------------------------------------------------------------------
+# Found by the pre-review audit
+# ---------------------------------------------------------------------------
+
+
+def test_add_texts_with_ids_keeps_insert_knobs_off_the_upsert():
+    # Index.upsert takes none of Index.insert's knobs; they must only reach the
+    # rows this call inserts (FakeIndex.upsert, like the SDK, rejects extras).
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    existing = store.add_texts(["old"])
+
+    ret = store.add_texts(
+        ["edited", "fresh"],
+        ids=[existing[0], None],
+        execute_until="flush",
+        request_ids=[],
+    )
+
+    assert ret[0] == existing[0]
+    assert len(index.upserts) == 1
+
+
+def test_flush_inserts_are_not_queued_for_the_merge_drain():
+    # execute_until="flush" submits no merge, so waiting for one would block
+    # for the whole drain budget.
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+
+    store.add_texts(["a"], execute_until="flush")
+    assert store._pending_inserts == {}
+
+    store.add_texts(["b"])
+    assert store._pending_inserts == {None: ["req-ins-2"]}
+
+
+def test_upsert_inserts_are_queued_for_the_merge_drain():
+    # Rows the upsert arm inserts merge like any other insert.
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    existing = store.add_texts(["old"], await_completion=True)
+
+    store.add_texts(
+        ["new", "old-edited"], ids=[None, existing[0]], await_completion=False
+    )
+
+    assert store._pending_inserts == {None: ["req-ups-1-ins"]}
+
+
+def test_drain_only_waits_for_the_mutated_partition():
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    store.add_texts(["a"], partition_name="tenant_a")
+    ids_b = store.add_texts(["b"], partition_name="tenant_b")
+
+    store.update_metadata(ids_b, ["b2"], partition_name="tenant_b")
+
+    assert [w["partition_name"] for w in index.stage_waits] == ["tenant_b"]
+    assert list(store._pending_inserts) == ["tenant_a"]  # still queued
+
+
+def test_drain_ignores_the_callers_per_call_timeout():
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    ids = store.add_texts(["a"])
+
+    store.update_metadata(ids, ["b"], timeout_s=5)
+
+    assert index.stage_waits[0]["timeout_s"] == store.config.write.drain_timeout_s
+    assert index.updates[0]["timeout_s"] == 5
+
+
+def test_delete_drops_repeated_ids():
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    ids = store.add_texts(["a", "b"])
+
+    assert store.delete([ids[0], ids[0], ids[1]]) is True
+    assert index.deleted[0]["item_ids"] == [1, 2]
+
+
+def test_update_rejects_repeated_and_non_positive_ids_before_the_sdk():
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient()
+    )
+    with pytest.raises(ValueError, match="unique"):
+        store.update_metadata(["1", "1"], ["a", "b"])
+    with pytest.raises(ValueError, match="positive"):
+        store.update_metadata(["0"], ["a"])
+
+
+def test_zero_is_not_an_item_id():
+    # Chunk-index style ids start at 0; the server never issues 0, so it is a
+    # foreign id — inserted with a warning, not an SDK validation error.
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    with pytest.warns(UserWarning, match="not enVector item IDs"):
+        ret = store.add_texts(["a"], ids=["0"])
+    assert ret == ["1"]
+    assert index.upserts == []
+
+
+def test_from_documents_uses_document_ids_like_add_documents():
+    index = FakeIndex()
+    docs = [LC_Document(page_content="a", metadata={}, id="7")]
+
+    Envector.from_documents(
+        docs, FakeEmbeddings(dim=4), config=_cfg(), client=FakeClient(index)
+    )
+
+    # The id reached the store as an item ID (upsert arm) instead of being dropped.
+    assert [it.item_id for it in index.upserts[0]["items"]] == [7]

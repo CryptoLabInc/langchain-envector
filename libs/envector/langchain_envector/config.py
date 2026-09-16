@@ -61,7 +61,8 @@ class WriteSettings:
     await_delete: bool = True
     await_update: bool = True
 
-    # Shared polling budget for the await_* waits above.
+    # Polling budget for the delete/update/upsert waits. Inserts keep the
+    # SDK's own budget (a day) unless `timeout_s` is passed to add_texts.
     timeout_s: float = 600.0
     poll_interval_s: float = 1.0
 

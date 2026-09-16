@@ -138,24 +138,38 @@ class EnvectorClient:
         self._connect(ev_client)
 
         index_params = self._resolve_index_params()
+        if not c.kms_address and not k.key_path:
+            raise ValueError(
+                "KeyConfig.key_path is required unless ConnectionConfig.kms_address is set."
+            )
 
         # Index config + key setup (KMS-managed keys require key_path=None)
-        ev_client.init_index_config(
-            index_name=i.index_name,
-            dim=i.dim,
-            key_path=None if c.kms_address else k.key_path,
-            key_id=k.key_id,
-            seal_mode=k.seal_mode,
-            seal_kek_path=k.seal_kek_path,
-            preset=k.preset,
-            eval_mode=k.eval_mode,
-            query_encryption=i.query_encryption,
-            index_encryption=i.index_encryption,
-            index_params=index_params,
-            auto_key_setup=True,
-            description=i.description,
-            metadata_encryption=i.metadata_encryption,
-        )
+        try:
+            ev_client.init_index_config(
+                index_name=i.index_name,
+                dim=i.dim,
+                key_path=None if c.kms_address else k.key_path,
+                key_id=k.key_id,
+                seal_mode=k.seal_mode,
+                seal_kek_path=k.seal_kek_path,
+                preset=k.preset,
+                eval_mode=k.eval_mode,
+                query_encryption=i.query_encryption,
+                index_encryption=i.index_encryption,
+                index_params=index_params,
+                auto_key_setup=True,
+                description=i.description,
+                metadata_encryption=i.metadata_encryption,
+            )
+        except ValueError as e:
+            if "does not match the default key path" not in str(e):
+                raise
+            # pyenvector pins one key path per process; say so in our terms.
+            raise ValueError(
+                f"pyenvector keeps one key path per process; this store asked for "
+                f"{k.key_path!r} while another key path is already active. "
+                "Use one KeyConfig.key_path per process."
+            ) from e
 
         # Create index if missing. create_index already returns the bound Index,
         # so reuse it instead of re-opening the same index by name.
@@ -166,6 +180,7 @@ class EnvectorClient:
                 index = ev_client.create_index(
                     index_name=i.index_name,
                     dim=i.dim,
+                    # a fresh copy: init_index_config rewrote the first one in place
                     index_params=self._resolve_index_params(),
                 )
 

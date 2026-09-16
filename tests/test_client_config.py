@@ -86,7 +86,7 @@ class _FakeEvClient:
         self.index_config = kwargs
 
 
-def _init_with_fake_sdk(**index_kwargs) -> dict:
+def _init_with_fake_sdk(key=None, ev_client=None, **index_kwargs) -> dict:
     """Run init() against a stub SDK and return what it was told about the index.
 
     No pytest fixtures here: `scripts/run_unit_tests.py` calls test functions
@@ -97,7 +97,7 @@ def _init_with_fake_sdk(**index_kwargs) -> dict:
 
     from langchain_envector import client as client_mod
 
-    ev_client = _FakeEvClient()
+    ev_client = ev_client or _FakeEvClient()
     fake = types.ModuleType("pyenvector")
     fake.EnvectorClient = lambda: ev_client
     fake.Index = lambda name: object()
@@ -110,7 +110,7 @@ def _init_with_fake_sdk(**index_kwargs) -> dict:
     try:
         cfg = EnvectorConfig(
             connection=ConnectionConfig(address="dummy:0"),
-            key=KeyConfig(key_path="./keys", key_id="kid"),
+            key=key or KeyConfig(key_path="./keys", key_id="kid"),
             index=IndexSettings(index_name="idx", dim=32, **index_kwargs),
             create_if_missing=False,
         )
@@ -134,3 +134,31 @@ def test_index_encryption_reaches_the_sdk():
 def test_index_encryption_still_defaults_to_cipher():
     sent = _init_with_fake_sdk()
     assert sent["index_encryption"] == "cipher"
+
+
+def test_missing_key_path_without_kms_is_a_clear_error():
+    # KeyConfig fields became optional for KMS-managed keys; without a KMS
+    # address the SDK would fail deep inside key setup instead.
+    try:
+        _init_with_fake_sdk(key=KeyConfig(key_id="kid"))
+        assert False, "Expected a ValueError naming key_path"
+    except ValueError as e:
+        assert "key_path" in str(e) and "kms_address" in str(e)
+
+
+def test_second_key_path_in_one_process_is_explained_in_our_terms():
+    class _PinnedEvClient(_FakeEvClient):
+        def init_index_config(self, **kwargs):
+            raise ValueError(
+                "Key path ./keys_b does not match the default key path ./keys_a. "
+                "Please reinitialize. pyenvector.init()"
+            )
+
+    try:
+        _init_with_fake_sdk(
+            key=KeyConfig(key_path="./keys_b", key_id="kid"),
+            ev_client=_PinnedEvClient(),
+        )
+        assert False, "Expected a ValueError about one key path per process"
+    except ValueError as e:
+        assert "one key path per process" in str(e) and "./keys_b" in str(e)

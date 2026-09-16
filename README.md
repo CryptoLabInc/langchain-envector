@@ -41,7 +41,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - Client-side filtering requires the JSON envelope to include an object under `metadata`.
 
 ## Limitations
-- Item IDs are issued by the server; use the IDs returned by `add_texts` / `add_documents` with `delete`, `update_documents`, `upsert_documents`, or pass them back as `ids` to update in place. Other IDs cannot be created — such rows get server-issued IDs and a `UserWarning`.
+- Item IDs are issued by the server (positive integers, returned as strings). Pass them back to `delete`, `update_documents`, `upsert_documents`, or as `ids` to `add_documents` to update in place — any numeric id is taken to be one of them. Other IDs cannot be created; such rows get server-issued IDs and a `UserWarning`.
 - Fetch-by-ID (`get_by_ids`) is unsupported, and so is LangChain's `indexing` API, which depends on its own IDs.
 - Embeddings must be unit norm: scores are inner products computed under encryption, and vectors with components outside [-1, 1] rank incorrectly.
 - A row deleted moments ago can still take a top-k slot briefly, so a search right after `delete` may return fewer than `k`; pass `fetch_k` to over-fetch.
@@ -179,9 +179,8 @@ print(result["inserted_item_ids"])  # IDs issued for the ID-less entries
 store.delete(ids)  # accepts ints or numeric strings, e.g. doc.id
 ```
 
-Deletion is asynchronous server-side; by default this waits until the affected
-shards are rebuilt, which is the SDK's own default and returned immediately in
-measurement.
+Deletion is asynchronous server-side; by default `delete` waits for the SDK's
+completion signal (`WriteSettings.await_delete`).
 
 ### Partitions
 
