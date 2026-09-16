@@ -46,6 +46,21 @@ def _split_caller_ids(ids: List[Any]) -> Tuple[List[Optional[int]], List[Any]]:
     return item_ids, foreign
 
 
+def _one_embedding_arg(embedding: Any, embeddings: Any) -> Any:
+    """Resolve the standard positional ``embedding`` and our older
+    ``embeddings=`` keyword into one value, rejecting conflicting pairs."""
+    if isinstance(embedding, (list, tuple)) and embedding and isinstance(embedding[0], dict):
+        # The second positional argument used to be `metadatas`. Catch the old
+        # call shape here rather than failing deeper inside as_embeddings().
+        raise TypeError(
+            "the second positional argument is `embedding` (as in LangChain's "
+            "VectorStore); pass metadatas by keyword: metadatas=[...]"
+        )
+    if embedding is not None and embeddings is not None and embedding is not embeddings:
+        raise ValueError("pass either `embedding` or `embeddings`, not both")
+    return embedding if embedding is not None else embeddings
+
+
 def _chunked(items: List[Any], size: int) -> Iterable[List[Any]]:
     for start in range(0, len(items), size):
         yield items[start : start + size]
@@ -900,6 +915,7 @@ class Envector(VectorStore):  # type: ignore[misc]
     def from_texts(
         cls,
         texts: List[str],
+        embedding: Optional[Embeddings] = None,
         metadatas: Optional[List[Dict[str, Any]]] = None,
         *,
         embeddings: Optional[Embeddings] = None,
@@ -908,17 +924,21 @@ class Envector(VectorStore):  # type: ignore[misc]
     ) -> "Envector":  # type: ignore[override]
         """Create a store from texts. Requires `config` in kwargs.
 
+        Takes the embedding model as the second positional argument like every
+        other LangChain vector store (and like the inherited `afrom_texts`,
+        which calls it that way); `embeddings=` is kept as a keyword alias.
         Remaining keyword arguments are forwarded to `add_texts`, so a store
         with no embeddings can be seeded with pre-computed `vectors`.
 
         Example:
-            Envector.from_texts(texts, metadatas=..., embeddings=..., config=cfg)
+            Envector.from_texts(texts, emb, metadatas=..., config=cfg)
         """
+        embedding = _one_embedding_arg(embedding, embeddings)
         config: Optional[EnvectorConfig] = kwargs.pop("config", None)  # type: ignore
         client: Optional[EnvectorClient] = kwargs.pop("client", None)  # type: ignore
         if config is None:
             raise ValueError("`config` (EnvectorConfig) is required for from_texts().")
-        store = cls(config=config, embeddings=embeddings, client=client)
+        store = cls(config=config, embeddings=embedding, client=client)
         # Everything left over belongs to add_texts: `vectors` for a store with
         # no embeddings, plus partition_name and the write-path overrides.
         store.add_texts(texts=texts, metadatas=metadatas, ids=ids, **kwargs)
@@ -928,15 +948,16 @@ class Envector(VectorStore):  # type: ignore[misc]
     def from_documents(
         cls,
         documents: List[Document],
+        embedding: Optional[Embeddings] = None,
         *,
         embeddings: Optional[Embeddings] = None,
         **kwargs: Any,
     ) -> "Envector":  # type: ignore[override]
+        """Create a store from Documents. Same argument shape as `from_texts`."""
+        embedding = _one_embedding_arg(embedding, embeddings)
         texts = [d.page_content for d in documents]
         metadatas = [getattr(d, "metadata", {}) for d in documents]
-        return cls.from_texts(
-            texts=texts, metadatas=metadatas, embeddings=embeddings, **kwargs
-        )
+        return cls.from_texts(texts, embedding, metadatas=metadatas, **kwargs)
 
     # Optional: if LangChain is installed, this will be used; otherwise, users may call similarity_search directly.
     def as_retriever(self, **kwargs: Any):  # pragma: no cover - wrapper

@@ -829,3 +829,73 @@ def test_add_texts_rejects_ids_of_the_wrong_length():
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient())
     with pytest.raises(ValueError, match="equal length"):
         store.add_texts(["a", "b"], ids=[1])
+
+
+# ---------------------------------------------------------------------------
+# from_texts / from_documents take `embedding` as the second positional
+# argument like every other LangChain vector store. `embeddings=` stays as a
+# keyword alias.
+# ---------------------------------------------------------------------------
+
+
+def test_from_texts_accepts_the_standard_positional_embedding():
+    client = FakeClient()
+    emb = FakeEmbeddings(dim=4)
+
+    store = Envector.from_texts(
+        ["A", "B"], emb, [{"m": "a"}, {"m": "b"}], config=_cfg(), client=client
+    )
+
+    assert store._embeddings is emb
+    inserted = client.index.inserted[0]
+    assert inserted["data"] == emb.embed_documents(["A", "B"])
+    assert len(inserted["metadata"]) == 2
+
+
+def test_from_documents_accepts_the_standard_positional_embedding():
+    client = FakeClient()
+    emb = FakeEmbeddings(dim=4)
+    docs = [LC_Document(page_content="A", metadata={"m": 1})]
+
+    store = Envector.from_documents(docs, emb, config=_cfg(), client=client)
+
+    assert store._embeddings is emb
+    assert len(client.index.inserted[0]["metadata"]) == 1
+
+
+def test_from_texts_rejects_conflicting_embedding_arguments():
+    with pytest.raises(ValueError, match="not both"):
+        Envector.from_texts(
+            ["A"],
+            FakeEmbeddings(dim=4),
+            embeddings=FakeEmbeddings(dim=4),
+            config=_cfg(),
+            client=FakeClient(),
+        )
+
+
+def test_from_texts_explains_the_old_positional_metadatas_shape():
+    # Before the signature change the second positional argument was
+    # `metadatas`. That call shape now fails with a message that says so.
+    with pytest.raises(TypeError, match="metadatas by keyword"):
+        Envector.from_texts(
+            ["A"], [{"m": 1}], embeddings=FakeEmbeddings(dim=4), config=_cfg(), client=FakeClient()
+        )
+
+
+async def test_afrom_texts_and_afrom_documents_go_through_the_inherited_wrappers():
+    # The base class calls cls.from_texts(texts, embedding, metadatas, **kwargs)
+    # positionally — the call that used to TypeError.
+    emb = FakeEmbeddings(dim=4)
+
+    c1 = FakeClient()
+    s1 = await Envector.afrom_texts(["A", "B"], emb, [{"m": 1}, {"m": 2}], config=_cfg(), client=c1)
+    assert isinstance(s1, Envector)
+    assert len(c1.index.inserted[0]["metadata"]) == 2
+
+    c2 = FakeClient()
+    s2 = await Envector.afrom_documents(
+        [LC_Document(page_content="A", metadata={})], emb, config=_cfg(), client=c2
+    )
+    assert isinstance(s2, Envector)
+    assert len(c2.index.inserted[0]["metadata"]) == 1
