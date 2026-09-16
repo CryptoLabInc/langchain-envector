@@ -196,7 +196,7 @@ print(store.list_partitions())  # [{"name": ..., "status": ..., "num_vectors": .
 store.drop_partition("tenant_a")  # removes the partition and its data
 ```
 
-Omitting `partition_name` / `partition_names` uses the default partition or searches the whole index.
+Omitting `partition_name` / `partition_names` uses the default partition or searches the whole index. Updates and deletes address rows within one partition, so pass `partition_name` for rows stored in a named partition.
 
 
 ## Troubleshooting
