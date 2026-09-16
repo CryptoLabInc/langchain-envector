@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from .config import EnvectorConfig
@@ -21,6 +22,28 @@ def _mutation_items(item_ids: List[Any], label: str) -> List[int]:
             f"Envector.{label} expects integer item IDs (or numeric strings) "
             "as returned by add_texts/add_documents."
         ) from e
+
+
+def _split_caller_ids(ids: List[Any]) -> Tuple[List[Optional[int]], List[Any]]:
+    """Sort caller-supplied IDs into enVector item IDs and everything else.
+
+    Returns ``(item_ids, foreign)``: ``item_ids`` is positional against ``ids``
+    with ``None`` wherever the entry was ``None`` or not an integer, and
+    ``foreign`` lists the non-integer values so the caller can be told they
+    were not honoured.
+    """
+    item_ids: List[Optional[int]] = []
+    foreign: List[Any] = []
+    for x in ids:
+        if x is None:
+            item_ids.append(None)
+            continue
+        try:
+            item_ids.append(int(x))
+        except (TypeError, ValueError):
+            item_ids.append(None)
+            foreign.append(x)
+    return item_ids, foreign
 
 
 def _chunked(items: List[Any], size: int) -> Iterable[List[Any]]:
@@ -180,9 +203,18 @@ class Envector(VectorStore):  # type: ignore[misc]
         where the SDK's own tuning knobs live (``execute_until``, ``n_workers``,
         ``use_row_insert``, ...).
 
-        Notes:
-        - Manual `ids` are ignored: enVector issues its own item IDs. Use the
-          returned IDs with `delete` / `update_documents` / `upsert_documents`.
+        ``ids`` — LangChain's "add or update" contract, as far as enVector allows:
+        - An entry that is an enVector item ID (int, or a numeric string such as
+          the ``Document.id`` search results carry) **updates that item in
+          place** through ``upsert_documents``. An ID that no longer names a
+          live row cannot be recreated under that ID; its document is inserted
+          as a new row instead, with a ``UserWarning``, and the ID actually used
+          is returned in that position.
+        - Any other value (a UUID, a slug, ...) cannot be honoured: enVector
+          issues its own item IDs and has no insert-at-ID. Those entries are
+          inserted as new rows with a ``UserWarning`` naming the ignored IDs.
+        - ``None`` entries, or no ``ids`` at all, insert.
+        The returned list always holds the item IDs that are really in the index.
         """
         if not texts:
             return []
@@ -196,6 +228,30 @@ class Envector(VectorStore):  # type: ignore[misc]
             if self._embeddings is None:
                 raise ValueError("embeddings is None and vectors not provided")
             vectors = self._embeddings.embed_documents(texts)
+
+        if ids is not None:
+            if len(ids) != len(texts):
+                raise ValueError("texts and ids must have equal length")
+            item_ids, foreign = _split_caller_ids(list(ids))
+            if foreign:
+                warnings.warn(
+                    f"Envector cannot insert under caller-chosen IDs; {len(foreign)} "
+                    f"of the given ids are not enVector item IDs and were ignored "
+                    f"(e.g. {foreign[0]!r}). Those rows were inserted with "
+                    "server-issued IDs — use the returned IDs to address them.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            if any(i is not None for i in item_ids):
+                return self._add_or_update(
+                    texts,
+                    metadatas,
+                    item_ids,
+                    vectors=vectors,
+                    partition_name=partition_name,
+                    await_completion=await_completion,
+                    **kwargs,
+                )
 
         # Prepare metadata JSON strings per item
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
@@ -216,6 +272,59 @@ class Envector(VectorStore):  # type: ignore[misc]
         if not awaited and request_ids:
             self._pending_inserts.setdefault(partition_name, []).extend(request_ids)
         return item_ids
+
+    def _add_or_update(
+        self,
+        texts: List[str],
+        metadatas: List[Dict[str, Any]],
+        item_ids: List[Optional[int]],
+        *,
+        vectors: List[List[float]],
+        partition_name: Optional[str],
+        await_completion: Optional[bool],
+        **kwargs: Any,
+    ) -> List[int]:
+        """`add_texts` when some entries name existing item IDs.
+
+        Routes everything through one ``upsert_documents`` call — ``None``
+        slots insert, ID slots update in place — then re-inserts any document
+        whose ID matched no live row, since the server cannot recreate an item
+        under a chosen ID. Returns the item IDs really in the index, positional
+        against ``texts``.
+        """
+        docs = [Document(page_content=t, metadata=m) for t, m in zip(texts, metadatas)]
+        result = self.upsert_documents(
+            docs,
+            ids=item_ids,
+            vectors=vectors,
+            partition_name=partition_name,
+            await_completion=await_completion,
+            **kwargs,
+        )
+        inserted = iter(result.get("inserted_item_ids") or [])
+        out: List[int] = [next(inserted) if i is None else i for i in item_ids]
+
+        missing = set(result.get("not_found_item_ids") or [])
+        if missing:
+            pos = [k for k, i in enumerate(item_ids) if i in missing]
+            warnings.warn(
+                f"{len(pos)} of the given item IDs match no live row "
+                f"(e.g. {item_ids[pos[0]]}); enVector cannot recreate an item under "
+                "a chosen ID, so those documents were inserted as new rows. The "
+                "returned list holds the IDs actually used.",
+                UserWarning,
+                stacklevel=3,
+            )
+            new_ids = self.add_texts(
+                [texts[k] for k in pos],
+                [metadatas[k] for k in pos],
+                vectors=[vectors[k] for k in pos],
+                partition_name=partition_name,
+                await_completion=await_completion,
+            )
+            for k, nid in zip(pos, new_ids):
+                out[k] = nid
+        return out
 
     def delete(
         self,
@@ -763,20 +872,24 @@ class Envector(VectorStore):  # type: ignore[misc]
         vectors: Optional[List[List[float]]] = None,
         **kwargs: Any,
     ) -> List[int]:
-        """Insert a list of Documents.
+        """Add or update a list of Documents.
 
         Mirrors LangChain's VectorStore API. Delegates to `add_texts` by
         extracting `page_content` and `metadata` from each Document.
 
         Notes:
-        - Manual `ids` are ignored: enVector issues its own item IDs, and a
-          caller-chosen ID cannot create a new item. To overwrite existing
-          items, pass their returned IDs to `update_documents` or
-          `upsert_documents`.
+        - As in the base class, when `ids` is not given and the Documents carry
+          an ``id`` (search results do), those ids are used. Ids that are
+          enVector item IDs update the item in place; see `add_texts` for what
+          happens to ids enVector cannot honour.
         - When `embeddings` is not configured, you must supply `vectors`.
         - The returned item IDs are durable and addressable: use them with
           `delete`, `update_documents` and `upsert_documents`.
         """
+        if ids is None:
+            doc_ids = [getattr(d, "id", None) for d in documents]
+            if any(doc_ids):
+                ids = doc_ids  # type: ignore[assignment]
         texts = [getattr(d, "page_content", "") for d in documents]
         metadatas = [getattr(d, "metadata", {}) for d in documents]
         return self.add_texts(

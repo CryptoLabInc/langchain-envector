@@ -42,15 +42,23 @@ metadata-fetch API is `Indexer.get_metadata`, which addresses rows by
 `(shard_idx, row_idx)` positions rather than by `item_id`, so there is no way to
 resolve an `item_id` back to a document without a search.
 
-## `add_texts(ids=...)` is still ignored
+## Caller-chosen IDs on insert
 
 enVector issues its own `item_id` values and cannot insert at a caller-chosen
 ID: `Index.upsert` routes an ID-bearing item to the update arm, and an ID
 matching no live row is reported in `not_found_item_ids` instead of being
-inserted. The LangChain standard tests that require caller-chosen IDs to survive
-`add_documents` therefore remain `xfail`
-(`tests/integration_tests/test_vectorstore.py`). `upsert_documents` covers the
-half that 1.6 does support: overwriting items by their returned IDs.
+inserted. The client-facing RPCs are `insert_data` / `batch_insert_data` only
+(`insert_data_by_id` in the proto is shard-internal: `shard_id`, `ctxt_id`).
+
+`add_texts(ids=...)` now does what it can: integer IDs update in place through
+`upsert_documents`, IDs that match no live row and non-integer IDs are inserted
+as new rows with a `UserWarning`, and the returned list holds the IDs actually
+used. The LangChain standard tests that require arbitrary caller-chosen IDs to
+survive `add_documents` remain `xfail`
+(`tests/integration_tests/test_vectorstore.py`), and the LangChain indexing API
+(hash IDs + `delete` by those hashes) stays unsupported. Full compliance needs
+the server to accept an external ID on insert, or to keep an external-ID →
+item_id map.
 
 `add_texts` also keeps returning `List[int]` (the native `item_id` type) rather
 than the `List[str]` LangChain's type hints declare. Callers who need strings

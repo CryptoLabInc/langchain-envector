@@ -41,7 +41,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - Client-side filtering requires the JSON envelope to include an object under `metadata`.
 
 ## Limitations
-- Manual item IDs are not accepted on insert: EnVector issues its own `item_id` values and cannot create an item under a caller-chosen ID. Use the returned IDs for subsequent `delete` / `update_documents` / `upsert_documents` calls.
+- Caller-chosen IDs on insert are honoured only when they are enVector item IDs. `add_texts(ids=...)` / `add_documents(ids=...)` (and Documents that carry an `id`, as search results do) **update those items in place**; an ID that names no live row, or any non-integer ID (a UUID, a slug), cannot be created — enVector issues its own `item_id` values and has no insert-at-ID — so the row is inserted with a server-issued ID and a `UserWarning` says so. The returned list always holds the IDs really in the index. LangChain's indexing API (`langchain_core.indexing.index`), which relies on its own hash IDs surviving, is therefore not supported.
 - Fetch-by-ID (`get_by_ids`) is unsupported.
 - Filtering happens client-side, after the server has returned `k` hits, so `similarity_search(k=4, filter=...)` returns **fewer than `k`** whenever some of those hits are filtered out. Pass `fetch_k` (or set `IndexSettings.fetch_k`) to over-fetch — with `fetch_k=10` the same query returned the full 4.
 - Multi-key indexes and cloud key stores are not wired up yet — see [`TODO.md`](TODO.md).

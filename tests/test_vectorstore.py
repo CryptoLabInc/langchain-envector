@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from langchain_envector.config import (
     ConnectionConfig,
     EnvectorConfig,
@@ -20,14 +22,15 @@ def _cfg() -> EnvectorConfig:
 
 
 def test_add_texts_returns_item_ids():
-    # Test that add_texts returns the item IDs assigned by the vector store
-    # Note that user-provided IDs are ignored
+    # add_texts returns the item IDs the server assigned. IDs that are not
+    # enVector item IDs cannot be honoured — they are ignored, and loudly.
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
-    ret_ids = store.add_texts(
-        ["t1", "t2"], metadatas=[{"m": 1}, {"m": 2}], ids=["a", "b"]
-    )  # input ids ignored
+    with pytest.warns(UserWarning, match="not enVector item IDs"):
+        ret_ids = store.add_texts(
+            ["t1", "t2"], metadatas=[{"m": 1}, {"m": 2}], ids=["a", "b"]
+        )
 
     # Returned IDs
     assert len(ret_ids) == 2
@@ -256,8 +259,8 @@ def test_add_documents_with_embeddings():
 
 
 def test_add_documents_returns_item_ids():
-    # Test that add_documents returns the item IDs assigned by the vector store
-    # Note that user-provided IDs are ignored
+    # add_documents returns the item IDs the server assigned. Foreign ids
+    # (not enVector item IDs) are ignored with a warning.
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
@@ -265,7 +268,8 @@ def test_add_documents_returns_item_ids():
         LC_Document(page_content="D1", metadata={"t": 1}),
         LC_Document(page_content="D2", metadata={"t": 2}),
     ]
-    ret_ids = store.add_documents(docs, ids=["user-1", "user-2"])
+    with pytest.warns(UserWarning, match="not enVector item IDs"):
+        ret_ids = store.add_documents(docs, ids=["user-1", "user-2"])
 
     assert len(ret_ids) == 2
     assert ret_ids == [1, 2]
@@ -740,3 +744,88 @@ def test_drain_uses_its_own_timeout_budget():
     wait = client.index.stage_waits[0]
     assert wait["timeout_s"] == store.config.write.drain_timeout_s
     assert wait["timeout_s"] > store.config.write.timeout_s
+
+
+# ---------------------------------------------------------------------------
+# add_texts / add_documents with ids: LangChain's "add or update", as far as
+# enVector allows. Integer item IDs update in place via upsert; anything the
+# server cannot honour is inserted fresh, with a warning, and the returned
+# list says what is really in the index.
+# ---------------------------------------------------------------------------
+
+
+def test_add_documents_with_item_ids_updates_in_place():
+    index = FakeIndex()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index))
+    first = store.add_texts(["v1", "w1"])  # -> [1, 2]
+
+    docs = [
+        LC_Document(page_content="v2", metadata={"rev": 2}),
+        LC_Document(page_content="w2", metadata={"rev": 2}),
+    ]
+    ret = store.add_documents(docs, ids=[str(first[0]), first[1]])
+
+    # Same IDs come back, nothing new was inserted, and the change went through
+    # the upsert arm addressed by those IDs.
+    assert ret == first
+    assert len(index.inserted) == 1
+    assert len(index.upserts) == 1
+    assert [it.item_id for it in index.upserts[0]["items"]] == first
+    assert '"v2"' in index.upserts[0]["items"][0].metadata
+
+
+def test_add_documents_reuses_the_ids_search_results_carry():
+    # Base-class behaviour: with no ids kwarg, Documents that carry an `id`
+    # supply it. Re-adding a search hit must therefore overwrite, not duplicate.
+    index = FakeIndex()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index))
+    store.add_texts(["hello"])  # -> [1]
+
+    hit = store.similarity_search("q", k=1)[0]  # FakeIndex returns id 1
+    assert hit.id == "1"
+    hit.page_content = "hello, edited"
+
+    ret = store.add_documents([hit])
+
+    assert ret == [1]
+    assert len(index.inserted) == 1
+    assert len(index.upserts) == 1
+
+
+def test_add_texts_mixed_ids_insert_none_slots_and_update_the_rest():
+    index = FakeIndex()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index))
+    existing = store.add_texts(["old"])  # -> [1]
+
+    ret = store.add_texts(["new-a", "old-edited", "new-b"], ids=[None, existing[0], None])
+
+    # None slots were inserted (server-issued 2, 3 in order), the ID slot updated.
+    assert ret == [2, 1, 3]
+    items = index.upserts[0]["items"]
+    assert [it.item_id for it in items] == [None, 1, None]
+
+
+def test_add_texts_ids_naming_no_live_row_are_inserted_with_a_warning():
+    class _NotFoundIndex(FakeIndex):
+        def upsert(self, items, **kw):
+            result = super().upsert(items, **kw)
+            result["not_found_item_ids"] = [it.item_id for it in items if it.item_id == 99]
+            return result
+
+    index = _NotFoundIndex()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index))
+    live = store.add_texts(["live"])  # -> [1]
+
+    with pytest.warns(UserWarning, match="match no live row"):
+        ret = store.add_texts(["live-edited", "ghost"], ids=[live[0], 99])
+
+    # The live one was updated under its ID; the ghost got a fresh server ID.
+    assert ret[0] == 1
+    assert ret[1] not in (1, 99)
+    assert len(index.inserted) == 2  # initial insert + the re-insert of the ghost
+
+
+def test_add_texts_rejects_ids_of_the_wrong_length():
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient())
+    with pytest.raises(ValueError, match="equal length"):
+        store.add_texts(["a", "b"], ids=[1])
