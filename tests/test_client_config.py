@@ -87,11 +87,7 @@ class _FakeEvClient:
 
 
 def _init_with_fake_sdk(key=None, ev_client=None, **index_kwargs) -> dict:
-    """Run init() against a stub SDK and return what it was told about the index.
-
-    No pytest fixtures here: `scripts/run_unit_tests.py` calls test functions
-    with no arguments, so the stubbing is undone by hand instead.
-    """
+    """Run init() against a stub SDK and return what it was told about the index."""
     import sys
     import types
 

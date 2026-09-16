@@ -1,6 +1,6 @@
 # Envector (LangChain VectorStore)
 
-High-level VectorStore adaptor for Envector, using the `pyenvector` SDK. Vectors are always encrypted on the server; the SDK performs required crypto client-side.
+High-level VectorStore adaptor for Envector, using the `pyenvector` SDK. Vectors are encrypted on the server by default (`IndexSettings.index_encryption="cipher"`); the SDK performs the crypto client-side.
 
 Key points
 - Use high-level `pyenvector.EnvectorClient` and `pyenvector.Index`; avoid low-level `pyenvector.api.Indexer`/gRPC.

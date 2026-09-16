@@ -121,8 +121,8 @@ def test_e2e_vectorstore_plain():
         e2 = [0.0, 1.0] + [0.0] * (dim - 2)
         store_plain.add_texts(texts[:2], metadatas=metas[:2], vectors=[e1, e2])
 
-    # No sleep needed: add_texts waits for the inserted rows to become
-    # searchable by default (config.write.await_insert).
+    # No sleep needed: Index.insert publishes the rows through its own load
+    # step, so they are searchable when add_texts returns.
 
     # Search
     if use_emb:
