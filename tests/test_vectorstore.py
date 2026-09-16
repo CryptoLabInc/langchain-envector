@@ -34,7 +34,7 @@ def test_add_texts_returns_item_ids():
 
     # Returned IDs
     assert len(ret_ids) == 2
-    assert ret_ids == [1, 2]
+    assert ret_ids == ["1", "2"]
 
     # Stored metadata must not contain id
     assert len(client.index.inserted) == 1
@@ -272,7 +272,7 @@ def test_add_documents_returns_item_ids():
         ret_ids = store.add_documents(docs, ids=["user-1", "user-2"])
 
     assert len(ret_ids) == 2
-    assert ret_ids == [1, 2]
+    assert ret_ids == ["1", "2"]
 
 
 def test_add_documents_requires_vectors_when_no_embeddings():
@@ -292,7 +292,7 @@ def test_delete_passes_item_ids_to_sdk():
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
     ids = store.add_texts(["t1", "t2", "t3"])
-    assert ids == [1, 2, 3]
+    assert ids == ["1", "2", "3"]
 
     assert store.delete(ids=[ids[0], ids[2]]) is True
     assert len(client.index.deleted) == 1
@@ -308,7 +308,7 @@ def test_delete_accepts_string_ids():
     ids = store.add_texts(["a", "b"])
 
     assert store.delete(ids=[str(ids[0])]) is True
-    assert client.index.deleted[0]["item_ids"] == [ids[0]]
+    assert client.index.deleted[0]["item_ids"] == [int(ids[0])]
 
 
 def test_delete_empty_or_none_returns_false():
@@ -399,7 +399,7 @@ def test_update_metadata_builds_metadata_only_update_items():
     assert result == {"request_id": ["req-upd-1"], "not_found_item_ids": []}
 
     call = client.index.updates[0]
-    assert [it.item_id for it in call["items"]] == ids
+    assert [it.item_id for it in call["items"]] == [int(x) for x in ids]
     # Metadata-only: the vector must stay unset so the SDK leaves it in place
     assert call["items"][0].vector is None
     assert '"new"' in call["items"][0].metadata
@@ -444,7 +444,7 @@ def test_update_documents_replaces_vector_and_metadata():
     assert result["not_found_item_ids"] == []
 
     item = client.index.updates[0]["items"][0]
-    assert item.item_id == ids[0]
+    assert item.item_id == int(ids[0])
     # page_content is re-embedded, so the vector is replaced too
     assert item.vector == FakeEmbeddings(dim=4).embed_documents(["fresh"])[0]
     assert '"fresh"' in item.metadata
@@ -759,7 +759,7 @@ def test_add_documents_with_item_ids_updates_in_place():
     store = Envector(
         config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
     )
-    first = store.add_texts(["v1", "w1"])  # -> [1, 2]
+    first = store.add_texts(["v1", "w1"])  # -> ["1", "2"]
 
     docs = [
         LC_Document(page_content="v2", metadata={"rev": 2}),
@@ -772,7 +772,7 @@ def test_add_documents_with_item_ids_updates_in_place():
     assert ret == first
     assert len(index.inserted) == 1
     assert len(index.upserts) == 1
-    assert [it.item_id for it in index.upserts[0]["items"]] == first
+    assert [it.item_id for it in index.upserts[0]["items"]] == [int(x) for x in first]
     assert '"v2"' in index.upserts[0]["items"][0].metadata
 
 
@@ -783,7 +783,7 @@ def test_add_documents_reuses_the_ids_search_results_carry():
     store = Envector(
         config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
     )
-    store.add_texts(["hello"])  # -> [1]
+    store.add_texts(["hello"])  # -> ["1"]
 
     hit = store.similarity_search("q", k=1)[0]  # FakeIndex returns id 1
     assert hit.id == "1"
@@ -791,7 +791,7 @@ def test_add_documents_reuses_the_ids_search_results_carry():
 
     ret = store.add_documents([hit])
 
-    assert ret == [1]
+    assert ret == ["1"]
     assert len(index.inserted) == 1
     assert len(index.upserts) == 1
 
@@ -801,14 +801,14 @@ def test_add_texts_mixed_ids_insert_none_slots_and_update_the_rest():
     store = Envector(
         config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
     )
-    existing = store.add_texts(["old"])  # -> [1]
+    existing = store.add_texts(["old"])  # -> ["1"]
 
     ret = store.add_texts(
         ["new-a", "old-edited", "new-b"], ids=[None, existing[0], None]
     )
 
     # None slots were inserted (server-issued 2, 3 in order), the ID slot updated.
-    assert ret == [2, 1, 3]
+    assert ret == ["2", "1", "3"]
     items = index.upserts[0]["items"]
     assert [it.item_id for it in items] == [None, 1, None]
 
@@ -826,14 +826,14 @@ def test_add_texts_ids_naming_no_live_row_are_inserted_with_a_warning():
     store = Envector(
         config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
     )
-    live = store.add_texts(["live"])  # -> [1]
+    live = store.add_texts(["live"])  # -> ["1"]
 
     with pytest.warns(UserWarning, match="match no live row"):
         ret = store.add_texts(["live-edited", "ghost"], ids=[live[0], 99])
 
     # The live one was updated under its ID; the ghost got a fresh server ID.
-    assert ret[0] == 1
-    assert ret[1] not in (1, 99)
+    assert ret[0] == "1"
+    assert ret[1] not in ("1", "99")
     assert len(index.inserted) == 2  # initial insert + the re-insert of the ghost
 
 

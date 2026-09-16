@@ -211,7 +211,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         partition_name: Optional[str] = None,
         await_completion: Optional[bool] = None,
         **kwargs: Any,
-    ) -> List[int]:
+    ) -> List[str]:
         """Add texts to the index and return their item IDs.
 
         Texts are embedded with the configured model, or pass pre-computed
@@ -226,7 +226,9 @@ class Envector(VectorStore):  # type: ignore[misc]
         ``Document.id`` search results carry) updates that item in place; an ID
         with no live row, or a non-integer ID, cannot be created, so that row is
         inserted with a server-issued ID and a ``UserWarning``. ``None`` entries
-        insert. The returned list holds the IDs actually in the index.
+        insert. The returned list holds the IDs actually in the index, as
+        strings like LangChain's ``Document.id``; every method here accepts
+        them back in that form.
         """
         if not texts:
             return []
@@ -283,7 +285,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         )
         if not awaited and request_ids:
             self._pending_inserts.setdefault(partition_name, []).extend(request_ids)
-        return item_ids
+        return [str(i) for i in item_ids]
 
     def _add_or_update(
         self,
@@ -295,7 +297,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         partition_name: Optional[str],
         await_completion: Optional[bool],
         **kwargs: Any,
-    ) -> List[int]:
+    ) -> List[str]:
         """`add_texts` when some entries name existing item IDs.
 
         Routes everything through one ``upsert_documents`` call — ``None``
@@ -314,7 +316,7 @@ class Envector(VectorStore):  # type: ignore[misc]
             **kwargs,
         )
         inserted = iter(result.get("inserted_item_ids") or [])
-        out: List[int] = [next(inserted) if i is None else i for i in item_ids]
+        out: List[str] = [str(next(inserted) if i is None else i) for i in item_ids]
 
         missing = set(result.get("not_found_item_ids") or [])
         if missing:
@@ -871,7 +873,7 @@ class Envector(VectorStore):  # type: ignore[misc]
         *,
         vectors: Optional[List[List[float]]] = None,
         **kwargs: Any,
-    ) -> List[int]:
+    ) -> List[str]:
         """Add or update a list of Documents.
 
         Mirrors LangChain's VectorStore API. Delegates to `add_texts` by
