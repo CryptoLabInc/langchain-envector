@@ -45,29 +45,16 @@ class IndexSettings:
 class WriteSettings:
     """Whether each write path waits for the server before returning.
 
-    enVector writes are asynchronous server-side: the call returns once the
-    request is accepted, and the server finishes the work afterwards. What that
-    means for the next read differs per operation, so each default below was
-    measured against a live stack rather than assumed.
+    enVector accepts a write first and completes it server-side afterwards.
+    Inserted rows are searchable as soon as the call returns, so
+    ``await_insert`` is off by default and only adds durability. Updates return
+    before the rebuilt rows are visible and deletes before the shards are
+    rebuilt, so those wait by default. Set a flag to ``False`` for
+    fire-and-forget bulk work and wait once at the end.
 
-    - insert: rows become searchable through ``Index.insert(load=True)``, which
-      the SDK does by default. Waiting additionally blocks until the shards are
-      merged and saved — durability, not visibility — and cost a flat ~14s per
-      call regardless of batch size, while not waiting never lost a row across
-      batches of 2, 100 and 400. So it stays off.
-    - delete: the SDK's own default is to wait, and the wait returned
-      immediately in measurement. Left on.
-    - update: the call returns at swap-commit with the rebuilt rows' visibility
-      still pending. Without the wait the updated row was missing from the very
-      next search every time. Left on. Updates additionally wait for any
-      un-awaited inserts to merge first — see `Envector._drain_pending_inserts`.
-
-    Set any of these to ``False`` for fire-and-forget bulk work, then wait once
-    at the end.
-
-    Only the waiting is configured here. The SDK's per-call tuning knobs
-    (``execute_until``, ``n_workers``, ``use_row_insert``, ...) keep their own
-    defaults and reach ``Index.insert`` through ``add_texts(**kwargs)``.
+    Only the waiting is configured here; the SDK's per-call knobs
+    (``execute_until``, ``n_workers``, ``use_row_insert``, ...) reach
+    ``Index.insert`` through ``add_texts(**kwargs)``.
     """
 
     await_insert: bool = False
@@ -78,11 +65,8 @@ class WriteSettings:
     timeout_s: float = 600.0
     poll_interval_s: float = 1.0
 
-    # Budget for draining un-awaited inserts before an update/upsert. Separate
-    # and much larger than `timeout_s` because that wait grows with the number
-    # of un-awaited insert batches — the server merges them one at a time, so
-    # 20 batches took ~125s — and timing it out only forces a retry of the same
-    # wait. Nothing is mutated until the drain succeeds.
+    # Budget for waiting on un-awaited inserts before an update/upsert. Larger
+    # than `timeout_s` because it grows with the number of pending batches.
     drain_timeout_s: float = 3600.0
 
 

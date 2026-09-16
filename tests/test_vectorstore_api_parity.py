@@ -1,38 +1,21 @@
-"""Parity tests for the LangChain ``VectorStore`` methods Envector does not
-implement yet.
+"""Tests for the VectorStore methods Envector does not implement yet.
 
-Written ahead of the implementation. Each test below is marked
-``xfail(strict=True)``: it runs on every ``pytest``, fails today for the stated
-reason, and the moment an implementation makes it pass ``strict=True`` turns the
-XPASS into a failure — so the marker cannot be forgotten. When a feature lands,
-remove the marker from its tests, not the tests.
+Written ahead of the implementation and marked ``xfail(strict=True)``: each
+fails today for the stated reason, and once an implementation makes it pass
+the XPASS fails the run, so the marker is removed together with the feature.
 
-Scope — the gaps that can be closed inside this package and are still open:
+Open gaps covered here — the ones that can be closed inside this package:
 
 1. ``_select_relevance_score_fn`` → ``similarity_search_with_relevance_scores``
    and ``search_type="similarity_score_threshold"``
 2. MMR — ``max_marginal_relevance_search`` and its three siblings
 
-(The constructor-signature and ``embeddings``-property gaps have been closed;
-their tests now live in ``test_vectorstore.py`` as ordinary regression tests.)
+``get_by_ids`` needs a server API that addresses rows by item ID and native
+async needs an async pyenvector; neither can be closed here.
 
-``get_by_ids`` and native async are deliberately absent: the first needs a wire
-API that addresses rows by item ID (``GetMetadataRequest`` carries only
-shard/row positions) and the second needs an async pyenvector. Neither can be
-made to pass from this package.
-
-Facts the tests lean on, verified against pyenvector 1.6.2:
-
-- Search scores are raw inner products (the server RPC is ``InnerProduct``) and
-  pyenvector does not normalise vectors. With unit-norm embeddings the score is
-  therefore a cosine similarity in [-1, 1]; the fixtures below use unit-norm
-  vectors so a relevance function built on that assumption is exercised across
-  the whole range, negative included.
-- A search hit carries ``id``, ``score`` and ``metadata`` only. The wire
-  ``Metadata`` message is ``{id, data}`` — the stored vector never comes back.
-  MMR has to get candidate vectors some other way; re-embedding the returned
-  texts with the configured embeddings is the path these tests assume, so the
-  fake embeddings return the same vector for the same text every time.
+Search scores are raw inner products, so the unit-norm fixtures below keep them
+in [-1, 1]. Search hits carry no vectors; the MMR tests assume candidates are
+re-embedded with the configured model, so the fake embeddings are deterministic.
 """
 
 from __future__ import annotations

@@ -74,51 +74,34 @@ class TestEnvectorVectorStore(VectorStoreIntegrationTests):
             except Exception:
                 pass
 
-    # test_vectorstore_is_empty and test_vectorstore_still_empty used to be
-    # xfailed here for "empty index returns placeholder results". They pass, and
-    # the backend's id==0 placeholder filtering is present in 1.5 too, so those
-    # xfails were simply stale — nobody noticed because the overrides had `pass`
-    # bodies and so reported XPASS without asserting anything.
-    #
-    # Capability gaps below are marked xfail, but each override still runs the
-    # real standard test through super(). A no-op `pass` body would report XPASS
-    # without having asserted anything, which reads as "supported now" when
-    # nothing was checked.
-    #
-    # test_delete_missing_content is NOT overridden — Envector.delete accepts
-    # numeric-string IDs and must not raise for missing items, which is exactly
-    # what the standard test verifies.
-
-    # enVector issues its own item_ids and cannot insert at a caller-chosen ID:
-    # Index.upsert routes an id-bearing item to the update arm, and an id
-    # matching no live row lands in not_found_item_ids instead of being
-    # inserted. delete/update themselves work — see test_e2e.py — but these
-    # standard tests require add_documents(ids=...) to be honored.
+    # Capability gaps are marked xfail, but each override still runs the real
+    # standard test through super(), so an XPASS means the gap actually closed.
+    # These four need arbitrary caller-chosen IDs to survive add_documents;
+    # enVector issues its own item IDs and can only update existing ones.
     @pytest.mark.xfail(
-        reason="add_documents(ids=...) is not honored: enVector issues its own "
-        "item IDs and cannot insert at a caller-chosen ID."
+        reason="arbitrary caller-chosen IDs cannot be created: enVector issues "
+        "its own item IDs, so add_documents(ids=...) only updates existing items."
     )
     def test_deleting_documents(self, vectorstore: VectorStore) -> None:
         super().test_deleting_documents(vectorstore)
 
     @pytest.mark.xfail(
-        reason="add_documents(ids=...) is not honored: enVector issues its own "
-        "item IDs and cannot insert at a caller-chosen ID."
+        reason="arbitrary caller-chosen IDs cannot be created: enVector issues "
+        "its own item IDs, so add_documents(ids=...) only updates existing items."
     )
     def test_deleting_bulk_documents(self, vectorstore: VectorStore) -> None:
         super().test_deleting_bulk_documents(vectorstore)
 
     @pytest.mark.xfail(
-        reason="add_documents(ids=...) is not honored. Overwriting by ID is "
-        "supported through update_documents/upsert_documents with the item IDs "
-        "add_documents returned."
+        reason="arbitrary caller-chosen IDs cannot be created; overwriting works "
+        "only with item IDs the store issued."
     )
     def test_add_documents_by_id_with_mutation(self, vectorstore: VectorStore) -> None:
         super().test_add_documents_by_id_with_mutation(vectorstore)
 
     @pytest.mark.xfail(
-        reason="add_documents(ids=...) is not honored, so adding twice under the "
-        "same caller IDs duplicates instead of being idempotent."
+        reason="arbitrary caller-chosen IDs cannot be created, so adding twice "
+        "under the same caller IDs inserts twice."
     )
     def test_add_documents_with_ids_is_idempotent(
         self, vectorstore: VectorStore

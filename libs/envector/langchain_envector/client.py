@@ -5,17 +5,9 @@ from typing import Any, Optional, Tuple
 
 from .config import EnvectorConfig
 
-# pyenvector keeps one connection per process: `EnvectorClient.init_connect`
-# delegates to the `Index.init_connect` classmethod, which disconnects and
-# replaces the process-global `Index._default_indexer`. Connecting a second time
-# therefore closes the channel every earlier store is still using, and those
-# stores fail with "Cannot invoke RPC on closed channel!".
-#
-# So record what the live connection was opened with, and reuse it whenever a new
-# store asks for exactly the same endpoint instead of reconnecting. Anything that
-# differs — a different address, token or TLS setting — falls through to a real
-# connect, because reusing a channel for an endpoint the caller did not ask for
-# would silently talk to the wrong server.
+# pyenvector holds one connection per process: `Index.init_connect` replaces it
+# and closes the previous channel. Stores that ask for the endpoint already open
+# reuse it; anything different reconnects.
 _ACTIVE_CONNECTION: Optional[Tuple[Tuple[Any, ...], Any]] = None
 _CONNECTION_LOCK = threading.Lock()
 

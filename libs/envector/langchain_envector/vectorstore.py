@@ -208,34 +208,21 @@ class Envector(VectorStore):  # type: ignore[misc]
         await_completion: Optional[bool] = None,
         **kwargs: Any,
     ) -> List[int]:
-        """Add texts to the encrypted index and return their item IDs.
+        """Add texts to the index and return their item IDs.
 
-        If embeddings are provided, the texts are embedded automatically.
-        Otherwise, provide pre-computed `vectors`. Pass `partition_name` to
-        insert into a named partition.
+        Texts are embedded with the configured model, or pass pre-computed
+        ``vectors``. ``partition_name`` targets a named partition. Inserted rows
+        are searchable when the call returns; ``await_completion=True`` also
+        waits for the server to merge and save them (default
+        ``config.write.await_insert``). Other keyword arguments go to
+        ``Index.insert``.
 
-        Inserted rows are searchable straight away: `Index.insert` publishes them
-        via its own ``load`` step, so a following `similarity_search` sees them
-        without any wait here. ``await_completion=True`` additionally blocks
-        until the shards are merged and saved — durability rather than
-        visibility — which is off by default (``config.write.await_insert``).
-
-        Any other keyword argument goes straight to ``Index.insert``, which is
-        where the SDK's own tuning knobs live (``execute_until``, ``n_workers``,
-        ``use_row_insert``, ...).
-
-        ``ids`` — LangChain's "add or update" contract, as far as enVector allows:
-        - An entry that is an enVector item ID (int, or a numeric string such as
-          the ``Document.id`` search results carry) **updates that item in
-          place** through ``upsert_documents``. An ID that no longer names a
-          live row cannot be recreated under that ID; its document is inserted
-          as a new row instead, with a ``UserWarning``, and the ID actually used
-          is returned in that position.
-        - Any other value (a UUID, a slug, ...) cannot be honoured: enVector
-          issues its own item IDs and has no insert-at-ID. Those entries are
-          inserted as new rows with a ``UserWarning`` naming the ignored IDs.
-        - ``None`` entries, or no ``ids`` at all, insert.
-        The returned list always holds the item IDs that are really in the index.
+        ``ids`` follows LangChain's add-or-update contract as far as enVector
+        allows: an entry that is an item ID (int or numeric str, such as the
+        ``Document.id`` search results carry) updates that item in place; an ID
+        with no live row, or a non-integer ID, cannot be created, so that row is
+        inserted with a server-issued ID and a ``UserWarning``. ``None`` entries
+        insert. The returned list holds the IDs actually in the index.
         """
         if not texts:
             return []
@@ -571,21 +558,12 @@ class Envector(VectorStore):  # type: ignore[misc]
     ) -> None:
         """Wait for un-awaited inserts to merge before mutating their rows.
 
-        Updating or upserting a row whose insert has not reached the merged
-        stage makes that row disappear from search, even though the call reports
-        success and the index still counts it. Measured on a 1.6 stack: 4 of 6
-        mixed upserts lost the updated row when the insert had not been waited
-        for, 0 of 6 when it had.
-
-        Inserts stay fast because the wait is paid here — once, and only when
-        rows are actually mutated — rather than on every insert. Search and
-        delete are unaffected and need no wait.
-
-        The wait grows with the number of un-awaited insert batches, because
-        the server merges them one at a time: 20 batches took ~125s. It
-        therefore uses ``config.write.drain_timeout_s`` rather than the
-        per-call ``timeout_s``. Timing out raises and leaves the pending ids
-        in place, so nothing is mutated until a retry drains them.
+        Updating a row whose insert has not merged yet drops it from search
+        while the call still reports success, so the wait is paid here — once,
+        and only when rows are mutated — rather than on every insert. It uses
+        ``config.write.drain_timeout_s`` because it grows with the number of
+        pending batches. Timing out raises and keeps the pending ids, so
+        nothing is mutated until a retry drains them.
         """
         if not self._pending_inserts:
             return
@@ -708,12 +686,9 @@ class Envector(VectorStore):  # type: ignore[misc]
                 partition_names=partition_names,
             )
         except Exception as e:  # narrow-matched below, re-raised otherwise
-            # Deleting every row races the backend's shard bookkeeping: a search
-            # in that window answers NotFound instead of the empty result a
-            # never-populated index returns. Normalise the two — but only after
-            # the server confirms the index really holds nothing, so a transient
-            # NotFound over live data surfaces as the error it is instead of
-            # being silently reported as "no matches".
+            # A search right after every row was deleted can answer NotFound
+            # instead of an empty result. Treat it as empty only once the server
+            # confirms the index holds nothing; otherwise re-raise.
             if not (_is_empty_shard_list_error(e) and self._index_is_empty()):
                 raise
             return []
