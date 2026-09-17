@@ -37,6 +37,14 @@ def _reusable_indexer(key: Tuple[Any, ...]):
 
     from pyenvector.index import Index
 
+    if not hasattr(Index, "_default_indexer"):
+        # The reuse below leans on an SDK private; fail loudly if it moves
+        # rather than silently reconnecting and closing the other store's channel.
+        raise RuntimeError(
+            "pyenvector no longer exposes Index._default_indexer; the connection "
+            "reuse in langchain_envector.client must be updated for this SDK."
+        )
+
     # Only reuse the recorded indexer while it is still the process-global one
     # and its channel is open; anything else means someone reconnected under us.
     if Index._default_indexer is not indexer:

@@ -158,3 +158,129 @@ def test_second_key_path_in_one_process_is_explained_in_our_terms():
         assert False, "Expected a ValueError about one key path per process"
     except ValueError as e:
         assert "one key path per process" in str(e) and "./keys_b" in str(e)
+
+
+# ---------------------------------------------------------------------------
+# Connection reuse (client.py). These run without the SDK: the stub stands in
+# for pyenvector and pyenvector.index, which is what _reusable_indexer imports.
+# ---------------------------------------------------------------------------
+
+
+class _StubIndexer:
+    def __init__(self) -> None:
+        self.connected = True
+
+    def is_connected(self) -> bool:
+        return self.connected
+
+
+class _StubIndex:
+    """pyenvector.index.Index as far as connection reuse can see it."""
+
+    _default_indexer = None
+
+
+class _ConnectingEvClient(_FakeEvClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.indexer = None
+        self.connects: list = []
+
+    def init_connect(self, **kwargs) -> None:
+        self.connects.append(kwargs)
+        self.indexer = _StubIndexer()
+        _StubIndex._default_indexer = self.indexer
+
+
+def _with_stub_sdk(index_cls, run):
+    """Install the stub pyenvector modules, reset the reuse cache, run `run`."""
+    import sys
+    import types
+
+    from langchain_envector import client as client_mod
+
+    fake = types.ModuleType("pyenvector")
+    fake.Index = lambda name: object()
+    fake_index = types.ModuleType("pyenvector.index")
+    fake_index.Index = index_cls
+    fake.index = fake_index
+
+    saved = {name: sys.modules.get(name) for name in ("pyenvector", "pyenvector.index")}
+    prev_conn = client_mod._ACTIVE_CONNECTION
+    sys.modules["pyenvector"] = fake
+    sys.modules["pyenvector.index"] = fake_index
+    client_mod._ACTIVE_CONNECTION = None
+    _StubIndex._default_indexer = None
+    try:
+        return run(fake)
+    finally:
+        client_mod._ACTIVE_CONNECTION = prev_conn
+        for name, mod in saved.items():
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
+
+
+def _store_client(fake, address: str, ev_client) -> EnvectorClient:
+    fake.EnvectorClient = lambda: ev_client
+    cfg = EnvectorConfig(
+        connection=ConnectionConfig(address=address),
+        key=KeyConfig(key_path="./keys", key_id="kid"),
+        index=IndexSettings(index_name="idx", dim=32),
+        create_if_missing=False,
+    )
+    return EnvectorClient(cfg).init()
+
+
+def test_second_store_on_the_same_endpoint_reuses_the_connection():
+    def run(fake):
+        a, b = _ConnectingEvClient(), _ConnectingEvClient()
+        _store_client(fake, "host:1", a)
+        _store_client(fake, "host:1", b)
+        assert len(a.connects) == 1
+        assert b.connects == []  # adopted a's channel instead of reconnecting
+        assert b.indexer is a.indexer
+
+    _with_stub_sdk(_StubIndex, run)
+
+
+def test_a_different_endpoint_connects_afresh():
+    def run(fake):
+        a, b = _ConnectingEvClient(), _ConnectingEvClient()
+        _store_client(fake, "host:1", a)
+        _store_client(fake, "host:2", b)
+        assert len(b.connects) == 1
+        assert b.indexer is not a.indexer
+
+    _with_stub_sdk(_StubIndex, run)
+
+
+def test_a_closed_channel_is_not_reused():
+    def run(fake):
+        a, b = _ConnectingEvClient(), _ConnectingEvClient()
+        _store_client(fake, "host:1", a)
+        a.indexer.connected = False
+        _store_client(fake, "host:1", b)
+        assert len(b.connects) == 1
+
+    _with_stub_sdk(_StubIndex, run)
+
+
+def test_sdk_without_the_private_indexer_attribute_fails_loudly():
+    # Reuse leans on pyenvector's private Index._default_indexer. If the SDK
+    # drops it, the second store must not quietly fall back to reconnecting —
+    # that is the behaviour that used to close the first store's channel.
+    class _IndexWithoutPrivate:
+        pass
+
+    def run(fake):
+        a, b = _ConnectingEvClient(), _ConnectingEvClient()
+        _store_client(fake, "host:1", a)  # nothing cached yet: no import needed
+        try:
+            _store_client(fake, "host:1", b)
+            assert False, "Expected a RuntimeError about Index._default_indexer"
+        except RuntimeError as e:
+            assert "_default_indexer" in str(e)
+
+    _with_stub_sdk(_IndexWithoutPrivate, run)

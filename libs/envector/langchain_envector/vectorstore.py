@@ -339,6 +339,11 @@ class Envector(VectorStore):
         Deletion is asynchronous server-side; by default this waits until the
         affected shards are rebuilt and the remaining data is searchable again
         (``config.write.await_delete``). IDs matching no live row are a no-op.
+
+        Unlike update/upsert this does not wait for pending inserts first: the
+        server's DeleteDataCore classifies a not-yet-merged row as Pending and
+        applies the delete when the row lands (late-binding through
+        InsertShardMapList), so deleting an unmerged row is safe.
         """
         if not ids:
             return False
