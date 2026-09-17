@@ -42,8 +42,6 @@ VECTORSTORE.md
 es2-msa/
 envector-deployment/
 
-# Local helper scripts
-run_unit_tests.py
 
 # Jupyter
 .ipynb_checkpoints/
