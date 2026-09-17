@@ -156,7 +156,8 @@ def test_similarity_search_by_vector_with_filter_and_threshold():
     )
     assert len(docs) == 1
     assert docs[0].page_content == "Keep"
-    assert docs[0].metadata["_score"] >= 0.5
+    assert docs[0].id == "v-0"
+    assert docs[0].metadata == {"k": 1}  # no internal keys leak into metadata
 
 
 def test_similarity_search_with_score_returns_tuples():
@@ -183,7 +184,9 @@ def test_similarity_search_with_score_returns_tuples():
     first_doc, first_score = results[0]
     assert isinstance(first_doc, LC_Document)
     assert first_doc.page_content == "Doc0"
-    assert first_doc.metadata["_score"] == first_score
+    assert first_score == 0.77
+    assert first_doc.id == "s-0"
+    assert first_doc.metadata == {"tag": "x"}
 
 
 def test_similarity_search_with_score_by_vector_returns_tuples():
@@ -206,7 +209,8 @@ def test_similarity_search_with_score_by_vector_returns_tuples():
     assert len(results) == 1
     doc, score = results[0]
     assert doc.page_content == "VectorDoc"
-    assert score == doc.metadata["_score"]
+    assert score == 0.66
+    assert doc.id == "sv-0"
 
 
 def test_from_texts_inserts_using_embeddings():
@@ -1093,3 +1097,20 @@ def test_search_params_reach_the_sdk_and_unknown_kwargs_do_not_vanish():
 
     with pytest.raises(TypeError, match="nprobe"):
         store.similarity_search("q", k=1, nprobe=64)  # not a known argument
+
+
+def test_re_adding_a_scored_hit_stores_only_user_metadata():
+    # Search results carry their id on Document.id and nothing else internal,
+    # so the read-edit-write round trip must not grow the stored payload.
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    store.add_texts(["hello"])  # -> ["1"]; FakeIndex.search returns id 1
+
+    hit, _score = store.similarity_search_with_score("q", k=1)[0]
+    hit.page_content = "hello, edited"
+    store.add_documents([hit])
+
+    stored = index.upserts[0]["items"][0].metadata
+    assert "_score" not in stored and "_id" not in stored

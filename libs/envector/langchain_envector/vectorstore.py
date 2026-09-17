@@ -722,8 +722,8 @@ class Envector(VectorStore):
             doc_id = item.get("id")
             doc = Document(
                 page_content=text,
-                metadata={**metadata, "_score": score, "_id": item.get("id")},
-                id=doc_id,
+                metadata=metadata,
+                id=str(doc_id) if doc_id is not None else None,
             )
             docs_with_scores.append((doc, score))
 
@@ -765,16 +765,7 @@ class Envector(VectorStore):
             search_params=search_params,
             **kwargs,
         )
-        return [
-            Document(
-                page_content=doc.page_content,
-                metadata={
-                    k: v for k, v in doc.metadata.items() if k not in ("_score", "_id")
-                },
-                id=getattr(doc, "id", None),
-            )
-            for doc, _ in docs_with_scores
-        ]
+        return [doc for doc, _ in docs_with_scores]
 
     def similarity_search_with_score(
         self,

@@ -130,14 +130,9 @@ def test_e2e_vectorstore_plain():
         docs = store_plain.similarity_search(q1, k=3)
         print("[plain] top-3 results for:", q1)
         for d in docs:
-            print(
-                " - score=",
-                d.metadata.get("_score"),
-                "text=",
-                (d.page_content[:80] + ("..." if len(d.page_content) > 80 else "")),
-            )
+            print(" - id=", d.id, "text=", d.page_content[:80])
         assert len(docs) >= 1
-        assert all(getattr(d, "id", None) or "_id" in d.metadata for d in docs)
+        assert all(getattr(d, "id", None) for d in docs)
         # optional filter check if 'label' is part of meta
         if not use_hf:
             docs_f = store_plain.similarity_search(
@@ -154,7 +149,7 @@ def test_e2e_vectorstore_plain():
             "[plain] results (explicit embedding e1):", [d.page_content for d in docs]
         )
         assert any(d.page_content == texts[0] for d in docs)
-        assert all(getattr(d, "id", None) or "_id" in d.metadata for d in docs)
+        assert all(getattr(d, "id", None) for d in docs)
         docs_f = store_plain.similarity_search(
             "q", k=2, embedding=e2, filter={"label": "B"}
         )
