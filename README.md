@@ -8,7 +8,7 @@ Encrypted vector search for LangChain using Envector, powered by homomorphic enc
 - Client-side encryption handled transparently by the SDK, including score thresholds and filtering.
 - In-place `delete`, `update_documents` and `upsert_documents` by item ID, plus named partitions.
 
-Requires `pyenvector >= 1.6.0rc1`.
+Requires `pyenvector >= 1.6.2`.
 
 ## Installation
 - Python 3.9–3.13 (recommend 3.11)
@@ -16,7 +16,7 @@ Requires `pyenvector >= 1.6.0rc1`.
   - `python3.11 -m venv .venv && source .venv/bin/activate`
 - Install runtime dependencies:
   - `pip install -U pip setuptools wheel`
-  - `pip install 'pyenvector>=1.6.0rc1' langchain sentence-transformers`
+  - `pip install 'pyenvector>=1.6.2' langchain sentence-transformers`
 
 ## Usage Overview
 1. Configure Envector using `EnvectorConfig`, pointing to your EnVector endpoint and keys.
