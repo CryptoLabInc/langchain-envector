@@ -1077,3 +1077,19 @@ def test_from_documents_uses_document_ids_like_add_documents():
 
     # The id reached the store as an item ID (upsert arm) instead of being dropped.
     assert [it.item_id for it in index.upserts[0]["items"]] == [7]
+
+
+def test_search_params_reach_the_sdk_and_unknown_kwargs_do_not_vanish():
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+
+    store.similarity_search("q", k=1, search_params={"nprobe": 64})
+    assert index.searched[-1]["search_params"] == {"nprobe": 64}
+
+    store.similarity_search_by_vector([0.0] * 4, k=1, search_params={"nprobe": 8})
+    assert index.searched[-1]["search_params"] == {"nprobe": 8}
+
+    with pytest.raises(TypeError, match="nprobe"):
+        store.similarity_search("q", k=1, nprobe=64)  # not a known argument

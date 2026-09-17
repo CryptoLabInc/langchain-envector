@@ -652,8 +652,15 @@ class Envector(VectorStore):
         score_threshold: Optional[float] = None,
         fetch_k: Optional[int] = None,
         partition_names: Optional[List[str]] = None,
+        search_params: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
+        if kwargs:
+            # Anything the SDK would not see must not disappear quietly.
+            raise TypeError(
+                f"unexpected search keyword arguments: {sorted(kwargs)}. Known: "
+                "k, filter, score_threshold, fetch_k, partition_names, search_params."
+            )
         top_k = fetch_k or self.config.index.fetch_k or k
 
         try:
@@ -661,6 +668,7 @@ class Envector(VectorStore):
                 query=embedding,
                 top_k=top_k,
                 output_fields=self.config.index.output_fields,
+                search_params=search_params,
                 partition_names=partition_names,
             )
         except Exception as e:  # narrow-matched below, re-raised otherwise
@@ -731,12 +739,15 @@ class Envector(VectorStore):
         score_threshold: Optional[float] = None,
         fetch_k: Optional[int] = None,
         partition_names: Optional[List[str]] = None,
+        search_params: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> List[Document]:
         """Search similar items for a text query.
 
         - Embeds query if embeddings are provided; else expect `embedding` kwarg.
         - Applies optional client-side filter and score threshold.
+        - ``search_params`` goes to ``Index.search`` as is (e.g. ``{"nprobe": 64}``
+          for IVF indexes). Unknown keyword arguments raise ``TypeError``.
         """
         embedding: Optional[List[float]] = kwargs.pop("embedding", None)
         if embedding is None:
@@ -751,6 +762,7 @@ class Envector(VectorStore):
             score_threshold=score_threshold,
             fetch_k=fetch_k,
             partition_names=partition_names,
+            search_params=search_params,
             **kwargs,
         )
         return [
@@ -773,6 +785,7 @@ class Envector(VectorStore):
         score_threshold: Optional[float] = None,
         fetch_k: Optional[int] = None,
         partition_names: Optional[List[str]] = None,
+        search_params: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         embedding: Optional[List[float]] = kwargs.pop("embedding", None)
@@ -788,6 +801,7 @@ class Envector(VectorStore):
             score_threshold=score_threshold,
             fetch_k=fetch_k,
             partition_names=partition_names,
+            search_params=search_params,
             **kwargs,
         )
 
@@ -801,6 +815,7 @@ class Envector(VectorStore):
         score_threshold: Optional[float] = None,
         fetch_k: Optional[int] = None,
         partition_names: Optional[List[str]] = None,
+        search_params: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> List[Document]:
         docs_with_scores = self._similarity_search_with_scores(
@@ -810,6 +825,7 @@ class Envector(VectorStore):
             score_threshold=score_threshold,
             fetch_k=fetch_k,
             partition_names=partition_names,
+            search_params=search_params,
             **kwargs,
         )
         return [doc for doc, _ in docs_with_scores]
@@ -823,6 +839,7 @@ class Envector(VectorStore):
         score_threshold: Optional[float] = None,
         fetch_k: Optional[int] = None,
         partition_names: Optional[List[str]] = None,
+        search_params: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ) -> List[Tuple[Document, float]]:
         return self._similarity_search_with_scores(
@@ -832,6 +849,7 @@ class Envector(VectorStore):
             score_threshold=score_threshold,
             fetch_k=fetch_k,
             partition_names=partition_names,
+            search_params=search_params,
             **kwargs,
         )
 

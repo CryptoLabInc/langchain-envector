@@ -199,9 +199,16 @@ class FakeIndex:
         query: List[float],
         top_k: int,
         output_fields: List[str],
+        search_params: Optional[Dict[str, Any]] = None,
         partition_names: Optional[List[str]] = None,
     ):
-        self.searched.append({"top_k": top_k, "partition_names": partition_names})
+        self.searched.append(
+            {
+                "top_k": top_k,
+                "partition_names": partition_names,
+                "search_params": search_params,
+            }
+        )
         if self.search_payload is not None:
             return self.search_payload
         # Default one-hit result with metadata JSON

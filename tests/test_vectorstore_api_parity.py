@@ -110,6 +110,7 @@ class ScoringFakeIndex(FakeIndex):
         query: List[float],
         top_k: int,
         output_fields: List[str],
+        search_params: Optional[Dict[str, Any]] = None,
         partition_names: Optional[List[str]] = None,
     ):
         self.searched.append({"top_k": top_k, "partition_names": partition_names})
