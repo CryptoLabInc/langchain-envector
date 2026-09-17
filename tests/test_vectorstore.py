@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from langchain_envector.config import (
@@ -10,7 +12,13 @@ from langchain_envector.config import (
 )
 from langchain_envector.vectorstore import Envector, Document as LC_Document
 
-from .conftest import FakeClient, FakeEmbeddings, FakeIndex
+from .conftest import (
+    FakeClient,
+    FakeEmbeddings,
+    FakeIndex,
+    LookupEmbeddings,
+    ScoringFakeIndex,
+)
 
 
 def _cfg() -> EnvectorConfig:
@@ -1114,3 +1122,87 @@ def test_re_adding_a_scored_hit_stores_only_user_metadata():
 
     stored = index.upserts[0]["items"][0].metadata
     assert "_score" not in stored and "_id" not in stored
+
+
+def _store(index=None, *, with_embeddings=True):
+    index = index or ScoringFakeIndex()
+    emb = LookupEmbeddings() if with_embeddings else None
+    return Envector(config=_cfg(), embeddings=emb, client=FakeClient(index)), index
+
+
+def _texts(docs):
+    return [d.page_content for d in docs]
+
+
+# ---------------------------------------------------------------------------
+# Relevance scores — (1 + inner product) / 2, see _select_relevance_score_fn
+# ---------------------------------------------------------------------------
+
+
+def test_relevance_scores_stay_in_the_unit_interval_and_keep_rank_order():
+    store, _ = _store()
+
+    # The base class warns when a score leaves [0, 1]; treat that as failure.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        pairs = store.similarity_search_with_relevance_scores("q", k=5)
+
+    assert _texts([d for d, _ in pairs]) == [
+        "apple pie",
+        "apple tart",
+        "bicycle",
+        "harbour",
+        "antimatter",
+    ]
+    scores = [s for _, s in pairs]
+    assert all(0.0 <= s <= 1.0 for s in scores), scores
+    # Raw inner products 1.0 > 0.995 > 0 == 0 > -0.5 must map monotonically.
+    assert scores[0] > scores[1] > scores[2] == scores[3] > scores[4], scores
+
+
+def test_relevance_score_threshold_cuts_below_the_given_relevance():
+    store, _ = _store()
+
+    pairs = store.similarity_search_with_relevance_scores("q", k=5)
+    cutoff = pairs[1][1]  # relevance of "apple tart"
+
+    kept = store.similarity_search_with_relevance_scores(
+        "q", k=5, score_threshold=cutoff
+    )
+    assert _texts([d for d, _ in kept]) == ["apple pie", "apple tart"]
+    assert all(s >= cutoff for _, s in kept)
+
+
+def test_search_dispatches_similarity_score_threshold():
+    store, _ = _store()
+
+    docs = store.search("q", "similarity_score_threshold", k=5, score_threshold=0.9)
+
+    assert docs, "expected at least the exact match to clear a 0.9 threshold"
+    assert docs[0].page_content == "apple pie"
+    assert "antimatter" not in _texts(docs)
+    assert "_score" not in docs[0].metadata and "_id" not in docs[0].metadata
+
+
+def test_retriever_with_similarity_score_threshold_returns_documents():
+    store, _ = _store()
+    retriever = store.as_retriever(
+        search_type="similarity_score_threshold",
+        search_kwargs={"score_threshold": 0.9, "k": 5},
+    )
+
+    docs = retriever.invoke("q")
+
+    assert docs and docs[0].page_content == "apple pie"
+    assert "antimatter" not in _texts(docs)
+
+
+async def test_async_relevance_scores_match_sync():
+    store, _ = _store()
+
+    sync_pairs = store.similarity_search_with_relevance_scores("q", k=3)
+    async_pairs = await store.asimilarity_search_with_relevance_scores("q", k=3)
+
+    assert [(d.page_content, s) for d, s in async_pairs] == [
+        (d.page_content, s) for d, s in sync_pairs
+    ]

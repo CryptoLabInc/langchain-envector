@@ -125,6 +125,18 @@ class Envector(VectorStore):
         # keyed by partition. See `_drain_pending_inserts`.
         self._pending_inserts: Dict[Optional[str], List[str]] = {}
 
+    def _select_relevance_score_fn(self):
+        """Map a raw search score onto [0, 1] for the ``*_relevance_scores`` API.
+
+        enVector scores are inner products. With unit-norm embeddings that is a
+        cosine similarity in [-1, 1], so ``(1 + score) / 2`` spans [0, 1] with
+        rank order kept. Values outside the range — non-unit-norm embeddings —
+        are clamped rather than let out of the interval the base class checks.
+        The base class's own inner-product helper treats its argument as a
+        distance and would invert the ranking, hence the override.
+        """
+        return lambda score: min(1.0, max(0.0, (1.0 + float(score)) / 2.0))
+
     @property
     def embeddings(self) -> Optional[Embeddings]:
         """The embedding model used for queries, or ``None`` when the store

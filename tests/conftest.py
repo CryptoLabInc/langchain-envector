@@ -240,3 +240,69 @@ class FakeClient:
     @property
     def index(self):
         return self._index
+
+
+# Unit-norm corpus in 4 dimensions. Query is [1, 0, 0, 0], so the inner
+# products are exactly the first coordinates: two near-duplicates at the top,
+# two orthogonal rows, and one row pointing away from the query.
+CORPUS: Dict[str, List[float]] = {
+    "apple pie": [1.0, 0.0, 0.0, 0.0],
+    "apple tart": [0.995, 0.0998, 0.0, 0.0],
+    "bicycle": [0.0, 1.0, 0.0, 0.0],
+    "harbour": [0.0, 0.0, 1.0, 0.0],
+    "antimatter": [-0.5, 0.0, 0.0, 0.866],
+}
+QUERY = [1.0, 0.0, 0.0, 0.0]
+
+
+def _dot(a: List[float], b: List[float]) -> float:
+    return float(sum(x * y for x, y in zip(a, b)))
+
+
+class LookupEmbeddings:
+    """Embeddings that return a fixed vector per text.
+
+    Deterministic across calls, which is what lets MMR re-embed the texts a
+    search returned and get back the vectors the index scored.
+    """
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return [list(CORPUS[t]) for t in texts]
+
+    def embed_query(self, text: str) -> List[float]:
+        return list(QUERY)
+
+
+@dataclass
+class ScoringFakeIndex(FakeIndex):
+    """FakeIndex whose ``search`` actually scores ``CORPUS`` by inner product.
+
+    Returns the top ``top_k`` hits in the shape the real SDK uses — ``id``,
+    ``score``, ``metadata`` and nothing else — so ``top_k`` genuinely limits
+    what the store gets to see. That is what makes the ``fetch_k`` assertions
+    meaningful: MMR at ``k=2`` cannot find a diverse pair unless it asked the
+    server for more than 2.
+    """
+
+    corpus: Dict[str, List[float]] = field(default_factory=lambda: dict(CORPUS))
+
+    def search(
+        self,
+        query: List[float],
+        top_k: int,
+        output_fields: List[str],
+        search_params: Optional[Dict[str, Any]] = None,
+        partition_names: Optional[List[str]] = None,
+    ):
+        self.searched.append({"top_k": top_k, "partition_names": partition_names})
+        texts = list(self.corpus)
+        ranked = sorted(texts, key=lambda t: _dot(query, self.corpus[t]), reverse=True)
+        hits: List[Dict[str, Any]] = [
+            {
+                "id": texts.index(t) + 1,
+                "score": _dot(query, self.corpus[t]),
+                "metadata": json.dumps({"text": t, "metadata": {"src": t}}),
+            }
+            for t in ranked[:top_k]
+        ]
+        return [hits]
