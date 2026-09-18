@@ -217,11 +217,12 @@ class Envector(VectorStore):
         arm below takes only ``timeout_s`` / ``poll_interval_s``.
 
         ``use_row_insert`` picks EnVector's row-insert path instead of the
-        default bulk one. Which is faster depends on how many rows the call
-        carries and on the index dimension — see ``docs/insert-modes.md`` for
-        the measured boundary. EnVector applies the row path only below ``dim``
-        rows; asking for it with more raises a ``UserWarning`` rather than
-        quietly inserting in bulk.
+        default bulk one. It does not return, or become searchable, any sooner
+        — it only lets a very small call finish merging sooner, which is worth
+        asking for when something waits on that merge. ``docs/insert-modes.md``
+        has the measured boundary per dimension. EnVector applies the row path
+        only below ``dim`` rows; asking for it with more raises a
+        ``UserWarning`` rather than quietly inserting in bulk.
 
         ``ids`` follows LangChain's add-or-update contract as far as enVector
         allows: an entry that is an item ID (int or numeric str, such as the
