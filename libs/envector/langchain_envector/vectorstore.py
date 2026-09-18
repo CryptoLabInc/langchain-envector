@@ -169,6 +169,28 @@ class Envector(VectorStore):
             index.load()
         return index
 
+    def _resolve_row_insert(self, use_row_insert: bool, n_rows: int) -> bool:
+        """Honour ``use_row_insert`` only where EnVector actually applies it.
+
+        The server takes the row-insert path for a batch of fewer rows than the
+        index dimension; at or above that it inserts in bulk and says nothing.
+        A caller who asked for the row path deliberately should hear that it did
+        not happen, so the silent fallback becomes a warning here.
+        """
+        if not use_row_insert:
+            return False
+        dim = self.config.index.dim
+        if n_rows >= dim:
+            warnings.warn(
+                f"use_row_insert=True was ignored: EnVector takes the row-insert path only "
+                f"for batches smaller than the index dimension, and this call carries "
+                f"{n_rows} rows at dim {dim}. The rows were inserted on the bulk path.",
+                UserWarning,
+                stacklevel=3,
+            )
+            return False
+        return True
+
     # -------------------------------
     # VectorStore API
     # -------------------------------
@@ -181,6 +203,7 @@ class Envector(VectorStore):
         vectors: Optional[List[List[float]]] = None,
         partition_name: Optional[str] = None,
         await_completion: Optional[bool] = None,
+        use_row_insert: bool = False,
         **kwargs: Any,
     ) -> List[str]:
         """Add texts to the index and return their item IDs.
@@ -192,6 +215,13 @@ class Envector(VectorStore):
         ``config.write.await_insert``). Other keyword arguments go to
         ``Index.insert`` and apply to the rows this call inserts; the upsert
         arm below takes only ``timeout_s`` / ``poll_interval_s``.
+
+        ``use_row_insert`` picks EnVector's row-insert path instead of the
+        default bulk one. Which is faster depends on how many rows the call
+        carries and on the index dimension — see ``docs/insert-modes.md`` for
+        the measured boundary. EnVector applies the row path only below ``dim``
+        rows; asking for it with more raises a ``UserWarning`` rather than
+        quietly inserting in bulk.
 
         ``ids`` follows LangChain's add-or-update contract as far as enVector
         allows: an entry that is an item ID (int or numeric str, such as the
@@ -243,7 +273,7 @@ class Envector(VectorStore):
                     await_completion=await_completion,
                     timeout_s=timeout_s,
                     poll_interval_s=poll_interval_s,
-                    insert_kwargs=kwargs,
+                    insert_kwargs={**kwargs, "use_row_insert": use_row_insert},
                 )
 
         # Prepare metadata JSON strings per item
@@ -263,6 +293,7 @@ class Envector(VectorStore):
             partition_name=partition_name,
             request_ids=request_ids,
             await_completion=awaited,
+            use_row_insert=self._resolve_row_insert(use_row_insert, len(texts)),
             **waits,
             **kwargs,
         )

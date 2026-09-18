@@ -575,8 +575,9 @@ def test_add_texts_does_not_wait_but_can_be_asked_to():
 
 
 def test_add_texts_passes_sdk_tuning_knobs_through_kwargs():
-    # execute_until / n_workers / use_row_insert are the SDK's own knobs; they
-    # are not mirrored in WriteSettings, they just travel through **kwargs.
+    # execute_until / n_workers are the SDK's own knobs; they are not mirrored
+    # in WriteSettings, they just travel through **kwargs. use_row_insert is a
+    # named parameter instead, because we have to check it against dim.
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
@@ -585,6 +586,52 @@ def test_add_texts_passes_sdk_tuning_knobs_through_kwargs():
     assert call["execute_until"] == "flush"
     assert call["n_workers"] == 4
     assert call["use_row_insert"] is True
+
+
+def test_add_texts_defaults_to_the_bulk_insert_path():
+    # The row path is opt-in: which one is faster depends on the batch size and
+    # the dimension, so the package does not choose for the caller.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.add_texts(["t1", "t2"])
+    assert client.index.inserted[0]["use_row_insert"] is False
+
+
+def test_row_insert_is_refused_and_reported_at_or_above_dim():
+    # enVector applies the row path only below `dim` rows and silently inserts
+    # in bulk otherwise. Say so rather than letting the caller believe it ran.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    with pytest.warns(UserWarning, match="row-insert path only"):
+        store.add_texts(["t1", "t2", "t3", "t4"], use_row_insert=True)  # dim is 4
+    assert client.index.inserted[0]["use_row_insert"] is False
+
+    # one row under the limit still takes it
+    store.add_texts(["t1", "t2", "t3"], use_row_insert=True)
+    assert client.index.inserted[1]["use_row_insert"] is True
+
+
+def test_row_insert_reaches_the_reinsert_arm_of_add_or_update():
+    # ids= routes through upsert_documents; a row whose id matched nothing is
+    # re-inserted by add_texts, and that re-insert must keep the chosen path.
+    class _NotFoundIndex(FakeIndex):
+        def upsert(self, items, **kw):
+            result = super().upsert(items, **kw)
+            result["not_found_item_ids"] = [
+                it.item_id for it in items if it.item_id == 99
+            ]
+            return result
+
+    index = _NotFoundIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    with pytest.warns(UserWarning, match="match no live row"):
+        store.add_texts(["ghost"], ids=[99], use_row_insert=True)
+
+    assert index.inserted[-1]["use_row_insert"] is True
 
 
 def test_partition_management_helpers():
