@@ -47,7 +47,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - A row deleted moments ago can still take a top-k slot briefly, so a search right after `delete` may return fewer than `k`; pass `fetch_k` to over-fetch.
 - Filtering happens client-side after the server returns `k` hits, so filtered results can be fewer than `k`; set `fetch_k` (or `IndexSettings.fetch_k`) to over-fetch.
 - One enVector endpoint per process; all stores in a process must point at the same server.
-- Leave `use_row_insert` off unless you wait for inserts to merge and add very few documents per call; it does not return or become searchable any sooner. [`docs/insert-modes.md`](docs/insert-modes.md) has the measured boundary per dimension.
+- An insert uploads a block sized by the index dimension, not by how many documents it carries (31.5 MB at dim 1024): over a slow link, pass `use_row_insert=True` for small calls. On a fast one leave it off. [`docs/insert-modes.md`](docs/insert-modes.md) has the measured boundary.
 - Updates wait for that store's pending inserts to merge first; when interleaving inserts and updates, set `WriteSettings.await_insert=True` and use one store instance per index.
 - `update_documents` / `upsert_documents` above 10,000 items are sent in several batches; if a later batch fails, the earlier ones stay applied.
 
@@ -108,10 +108,11 @@ store.add_texts(
 ```
 
 The default insert path costs about the same whether a call carries one document or many, so
-adding a few documents at a time to a live index is fine. EnVector has a second path for small
-calls, `use_row_insert=True`, which does not return any sooner but lets the index finish merging
-sooner; [`docs/insert-modes.md`](docs/insert-modes.md) says at which dimensions and call sizes
-that is worth asking for.
+adding a few documents at a time to a live index is fine, and such inserts are folded into the
+index rather than left as fragments. What that path does spend is upload: one block per call,
+sized by the index dimension. EnVector has a second path, `use_row_insert=True`, that uploads per
+document instead — worth it for small calls over a slow link, and for letting the index finish
+merging sooner. [`docs/insert-modes.md`](docs/insert-modes.md) has both boundaries.
 
 ### Similarity search
 

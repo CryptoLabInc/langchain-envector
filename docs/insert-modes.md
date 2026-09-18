@@ -14,15 +14,26 @@ Asking for it with more raises a `UserWarning`, and those documents go in on the
 
 ## Short answer
 
-**Leave `use_row_insert` off.** It does not make the call return sooner, and it does not make the
-documents searchable sooner — not even for a single document, where the two paths come out within
-about 10% of each other. From two documents up it is 1.5× to 5× slower, and it writes roughly
-twice as much to server storage on every call.
+**If your client and your EnVector server are on the same fast network, leave `use_row_insert`
+off.** It does not make the call return sooner and does not make the documents searchable sooner —
+not even for a single document, where the two paths come out within about 10% of each other. From
+two documents up it is 1.5× to 5× slower.
 
-The one thing it buys is that the index **finishes merging** sooner after a very small call. That
-is worth something only if you wait for the merge: you pass `await_completion=True`, or you call
-`update_documents` / `upsert_documents` soon after inserting, which waits for that store's pending
-inserts to merge first. In that case:
+**If your client reaches the server over a slow link, turn it on for small calls.** The bulk path
+uploads a block whose size comes from the index dimension, not from how many documents you are
+adding: at dim 1024 that is 31.5 MB per call, whether it carries one document or a thousand. The
+row path uploads 61.5 KB per document. Below about 100 Mbps that difference decides the question on
+its own — see "What each path uploads".
+
+Whichever you use, the documents end up occupying the same space in the index: small inserts are
+folded into the last partially-filled shard, so adding a few at a time does not leave the index
+fragmented or larger. The extra bytes each path writes while a call is in flight are reclaimed
+shortly afterwards.
+
+The other thing the row path buys is that the index **finishes merging** sooner after a very small
+call. That is worth something only if you wait for the merge: you pass `await_completion=True`, or
+you call `update_documents` / `upsert_documents` soon after inserting, which waits for that store's
+pending inserts to merge first. In that case:
 
 | index dim | row finishes merging sooner for a call of up to |
 |---|---|
@@ -34,11 +45,11 @@ inserts to merge first. In that case:
 | 1536 | no size — use bulk |
 
 ```python
-# default: adding documents, however few, to an index that is being searched
+# client next to the server: the default path, however few documents you add
 store.add_documents(new_docs)
 
-# only when you wait for the merge and the call is small, at a low dimension
-store.add_documents(new_docs, use_row_insert=True, await_completion=True)
+# client across a network, adding a few documents: avoid uploading a full block
+store.add_documents(new_docs, use_row_insert=True)
 ```
 
 ## The measurements
@@ -70,14 +81,55 @@ Time until the index has finished merging, which is the one place the row path i
 | 1024 | 16.4 → 12.2 s | 16.9 → 14.3 s | 17.0 → 17.2 s | 16.9 → 18.1 s |
 | 1536 | 17.2 → 14.9 s | 18.3 → 18.4 s | 17.8 → 21.5 s | 17.7 → 23.4 s |
 
-Storage written per call, which the row path loses at every size:
+## What each path uploads
 
-| index dim | bulk | row |
+This is the one place the difference is large, and it does not show up in the timings above
+because those were measured with the client on the same machine as the server.
+
+| index dim | bulk uploads per call, any size | row uploads per document |
+|---|---|---|
+| 256 | 7.9 MB | 61.5 KB |
+| 384 | 11.8 MB | 61.5 KB |
+| 512 | 15.8 MB | 61.5 KB |
+| 768 | 23.7 MB | 61.5 KB |
+| 1024 | 31.5 MB | 61.5 KB |
+| 1536 | 47.3 MB | 61.5 KB |
+
+Adding one document to a dim-1024 index uploads 31.5 MB on the bulk path and 61.5 KB on the row
+path — a factor of 500. The timings earlier in this page were taken with the client on the same
+machine as the server, where moving 31.5 MB is free and the difference does not appear.
+
+Adding the transfer time to both columns gives the call size below which the row path returns
+sooner. It barely depends on the dimension, because the bulk block, the row path's per-document
+work and the upload all scale with it together — what decides it is the link:
+
+| link to the server | row path returns sooner for calls of up to |
+|---|---|
+| 1 Gbps or same host | no size — use bulk |
+| 100 Mbps | 1–2 documents |
+| 50 Mbps | 2–3 documents |
+| 10 Mbps | 9–12 documents |
+
+These four rows are the measured timings plus transfer time at each speed, not four measurements;
+time both paths if the choice is close for you.
+
+## Server storage
+
+Each call also makes the server write more than it keeps: the bulk path stores the uploaded block,
+the row path about 2.1× that. Those are reclaimed a few minutes later and neither accumulates.
+
+| index dim | written per call, bulk | written per call, row |
 |---|---|---|
 | 256 | 7.9 MB | 16.9 MB |
 | 512 | 15.8 MB | 33.7 MB |
 | 1024 | 31.5 MB | 67.2 MB |
 | 1536 | 47.3 MB | 100.8 MB |
+
+What stays is the same for both paths. After 45 small calls on an index of 8192 documents, at every
+dimension, the index held three shards of 4096, 4096 and 402 documents — the small inserts were
+folded into the last partly-filled shard rather than each leaving one of its own. A shard does have
+a fixed cost (4.2 MB at dim 1024, plus about 4.1 KB per document), but it is paid once per 4096
+documents, not once per call.
 
 Measured on a single-node EnVector deployment, pyenvector 1.6.2, preset ip3, eval mode mms32,
 FLAT index, with nothing else running against the server. Your numbers will differ with hardware,
