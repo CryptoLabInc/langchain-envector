@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   checks:
-    runs-on: [self-hosted, linux, no-gpu]
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository

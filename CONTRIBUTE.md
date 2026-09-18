@@ -12,7 +12,7 @@ Thanks for your interest in improving the project! This guide covers local setup
    - `pip install -r tests/requirements.txt`
 
 ## Testing
-- **Unit tests** (fakes only): `python run_unit_tests.py`
+- **Unit tests** (fakes only): `python scripts/run_unit_tests.py`
 - **Integration tests** (requires EnVector server + keys):
   - Export `ENVECTOR_ADDRESS`, `ENVECTOR_KEY_PATH`, `ENVECTOR_KEY_ID`
   - Optional: `ENVECTOR_USE_EMBEDDINGS=1`, `ENVECTOR_EMB_MODEL`, `ENVECTOR_USE_HF_DATASET=1`
@@ -30,6 +30,6 @@ Please run relevant tests before submitting a PR and mention coverage in the des
 - [ ] Rebased on the latest `main` (or resolved merge conflicts).
 - [ ] Added tests or updated existing ones when behavior changes.
 - [ ] Updated documentation if user-facing behavior changed.
-- [ ] Verified `python run_unit_tests.py` (and integration tests if applicable).
+- [ ] Verified `python scripts/run_unit_tests.py` (and integration tests if applicable).
 
 We appreciate small, well-scoped PRs. Feel free to open a draft PR early to discuss larger changes.

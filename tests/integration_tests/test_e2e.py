@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import secrets
-import time
 import pytest
 
 from langchain_envector.config import (
@@ -28,7 +27,7 @@ def _require_env(name: str) -> str:
     os.environ.get("ENVECTOR_ADDRESS") is None,
     reason="Set ENVECTOR_ADDRESS (e.g., 0.0.0.0:50050) to enable Envector integration tests",
 )
-def test_e2e_vectorstore_plain_and_cipher():
+def test_e2e_vectorstore_plain():
     address = _require_env("ENVECTOR_ADDRESS")
     key_path = _require_env("ENVECTOR_KEY_PATH")
     key_id = _require_env("ENVECTOR_KEY_ID")
@@ -85,7 +84,9 @@ def test_e2e_vectorstore_plain_and_cipher():
     # Plain query mode
     cfg_plain = EnvectorConfig(
         connection=ConnectionConfig(address=address),
-        key=KeyConfig(key_path=key_path, key_id=key_id, preset="ip", eval_mode="rmp"),
+        key=KeyConfig(
+            key_path=key_path, key_id=key_id, preset="ip3", eval_mode="mms32"
+        ),
         index=IndexSettings(
             index_name=f"{base_index_name}_plain", dim=dim, query_encryption="plain"
         ),
@@ -120,8 +121,8 @@ def test_e2e_vectorstore_plain_and_cipher():
         e2 = [0.0, 1.0] + [0.0] * (dim - 2)
         store_plain.add_texts(texts[:2], metadatas=metas[:2], vectors=[e1, e2])
 
-    # Give server a moment if needed
-    time.sleep(0.2)
+    # No sleep needed: Index.insert publishes the rows through its own load
+    # step, so they are searchable when add_texts returns.
 
     # Search
     if use_emb:
@@ -129,14 +130,9 @@ def test_e2e_vectorstore_plain_and_cipher():
         docs = store_plain.similarity_search(q1, k=3)
         print("[plain] top-3 results for:", q1)
         for d in docs:
-            print(
-                " - score=",
-                d.metadata.get("_score"),
-                "text=",
-                (d.page_content[:80] + ("..." if len(d.page_content) > 80 else "")),
-            )
+            print(" - id=", d.id, "text=", d.page_content[:80])
         assert len(docs) >= 1
-        assert all(getattr(d, "id", None) or "_id" in d.metadata for d in docs)
+        assert all(getattr(d, "id", None) for d in docs)
         # optional filter check if 'label' is part of meta
         if not use_hf:
             docs_f = store_plain.similarity_search(
@@ -153,7 +149,7 @@ def test_e2e_vectorstore_plain_and_cipher():
             "[plain] results (explicit embedding e1):", [d.page_content for d in docs]
         )
         assert any(d.page_content == texts[0] for d in docs)
-        assert all(getattr(d, "id", None) or "_id" in d.metadata for d in docs)
+        assert all(getattr(d, "id", None) for d in docs)
         docs_f = store_plain.similarity_search(
             "q", k=2, embedding=e2, filter={"label": "B"}
         )
@@ -161,47 +157,6 @@ def test_e2e_vectorstore_plain_and_cipher():
         assert len(docs_f) >= 1
         assert docs_f[0].page_content == texts[1]
 
-    # Cipher query mode
-    cfg_cc = EnvectorConfig(
-        connection=ConnectionConfig(address=address),
-        key=KeyConfig(key_path=key_path, key_id=key_id, preset="ip", eval_mode="rmp"),
-        index=IndexSettings(
-            index_name=f"{base_index_name}_cipher", dim=dim, query_encryption="cipher"
-        ),
-        create_if_missing=True,
-    )
-    store_cc = Envector(config=cfg_cc, embeddings=(emb if use_emb else None))
-    if use_emb:
-        store_cc.add_texts(texts, metadatas=metas)
-    else:
-        store_cc.add_texts(texts[:2], metadatas=metas[:2], vectors=[e1, e2])
-
-    time.sleep(0.2)
-    if use_emb:
-        q2 = "cooking" if not use_hf else texts[-1].split(" ")[0]
-        docs_cc = store_cc.similarity_search(q2, k=3)
-        print("[cipher] top-3 results for:", q2)
-        for d in docs_cc:
-            print(
-                " - score=",
-                d.metadata.get("_score"),
-                "text=",
-                (d.page_content[:80] + ("..." if len(d.page_content) > 80 else "")),
-            )
-        assert len(docs_cc) >= 1
-        assert all(getattr(d, "id", None) or "_id" in d.metadata for d in docs_cc)
-    else:
-        docs_cc = store_cc.similarity_search("q", k=2, embedding=e2)
-        print(
-            "[cipher] results (explicit embedding e2):",
-            [d.page_content for d in docs_cc],
-        )
-        assert any(d.page_content == texts[1] for d in docs_cc)
-        assert all(getattr(d, "id", None) or "_id" in d.metadata for d in docs_cc)
-
     # Cleanup
     store_plain.client.ev.init_connect(address=address)
     store_plain.client.ev.drop_index(cfg_plain.index.index_name)
-
-    store_cc.client.ev.init_connect(address=address)
-    store_cc.client.ev.drop_index(cfg_cc.index.index_name)

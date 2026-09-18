@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import warnings
+
+import pytest
+
 from langchain_envector.config import (
     ConnectionConfig,
     EnvectorConfig,
@@ -8,7 +12,13 @@ from langchain_envector.config import (
 )
 from langchain_envector.vectorstore import Envector, Document as LC_Document
 
-from .conftest import FakeClient, FakeEmbeddings, FakeIndex
+from .conftest import (
+    FakeClient,
+    FakeEmbeddings,
+    FakeIndex,
+    LookupEmbeddings,
+    ScoringFakeIndex,
+)
 
 
 def _cfg() -> EnvectorConfig:
@@ -20,18 +30,19 @@ def _cfg() -> EnvectorConfig:
 
 
 def test_add_texts_returns_item_ids():
-    # Test that add_texts returns the item IDs assigned by the vector store
-    # Note that user-provided IDs are ignored
+    # add_texts returns the item IDs the server assigned. IDs that are not
+    # enVector item IDs cannot be honoured — they are ignored, and loudly.
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
-    ret_ids = store.add_texts(
-        ["t1", "t2"], metadatas=[{"m": 1}, {"m": 2}], ids=["a", "b"]
-    )  # input ids ignored
+    with pytest.warns(UserWarning, match="not enVector item IDs"):
+        ret_ids = store.add_texts(
+            ["t1", "t2"], metadatas=[{"m": 1}, {"m": 2}], ids=["a", "b"]
+        )
 
     # Returned IDs
     assert len(ret_ids) == 2
-    assert ret_ids == [2, 3]
+    assert ret_ids == ["1", "2"]
 
     # Stored metadata must not contain id
     assert len(client.index.inserted) == 1
@@ -153,7 +164,8 @@ def test_similarity_search_by_vector_with_filter_and_threshold():
     )
     assert len(docs) == 1
     assert docs[0].page_content == "Keep"
-    assert docs[0].metadata["_score"] >= 0.5
+    assert docs[0].id == "v-0"
+    assert docs[0].metadata == {"k": 1}  # no internal keys leak into metadata
 
 
 def test_similarity_search_with_score_returns_tuples():
@@ -180,7 +192,9 @@ def test_similarity_search_with_score_returns_tuples():
     first_doc, first_score = results[0]
     assert isinstance(first_doc, LC_Document)
     assert first_doc.page_content == "Doc0"
-    assert first_doc.metadata["_score"] == first_score
+    assert first_score == 0.77
+    assert first_doc.id == "s-0"
+    assert first_doc.metadata == {"tag": "x"}
 
 
 def test_similarity_search_with_score_by_vector_returns_tuples():
@@ -203,7 +217,8 @@ def test_similarity_search_with_score_by_vector_returns_tuples():
     assert len(results) == 1
     doc, score = results[0]
     assert doc.page_content == "VectorDoc"
-    assert score == doc.metadata["_score"]
+    assert score == 0.66
+    assert doc.id == "sv-0"
 
 
 def test_from_texts_inserts_using_embeddings():
@@ -256,8 +271,8 @@ def test_add_documents_with_embeddings():
 
 
 def test_add_documents_returns_item_ids():
-    # Test that add_documents returns the item IDs assigned by the vector store
-    # Note that user-provided IDs are ignored
+    # add_documents returns the item IDs the server assigned. Foreign ids
+    # (not enVector item IDs) are ignored with a warning.
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
@@ -265,10 +280,11 @@ def test_add_documents_returns_item_ids():
         LC_Document(page_content="D1", metadata={"t": 1}),
         LC_Document(page_content="D2", metadata={"t": 2}),
     ]
-    ret_ids = store.add_documents(docs, ids=["user-1", "user-2"])
+    with pytest.warns(UserWarning, match="not enVector item IDs"):
+        ret_ids = store.add_documents(docs, ids=["user-1", "user-2"])
 
     assert len(ret_ids) == 2
-    assert ret_ids == [2, 3]
+    assert ret_ids == ["1", "2"]
 
 
 def test_add_documents_requires_vectors_when_no_embeddings():
@@ -282,6 +298,60 @@ def test_add_documents_requires_vectors_when_no_embeddings():
         ), "Expected ValueError when embeddings is None and no vectors provided"
     except ValueError as e:
         assert "embeddings is None and vectors not provided" in str(e)
+
+
+def test_delete_passes_item_ids_to_sdk():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["t1", "t2", "t3"])
+    assert ids == ["1", "2", "3"]
+
+    assert store.delete(ids=[ids[0], ids[2]]) is True
+    assert len(client.index.deleted) == 1
+    call = client.index.deleted[0]
+    assert call["item_ids"] == [1, 3]
+    # Deletes wait for the shard rebuild by default so the next search reflects them
+    assert call["await_completion"] is True
+
+
+def test_delete_accepts_string_ids():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["a", "b"])
+
+    assert store.delete(ids=[str(ids[0])]) is True
+    assert client.index.deleted[0]["item_ids"] == [int(ids[0])]
+
+
+def test_delete_empty_or_none_returns_false():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    assert store.delete(ids=None) is False
+    assert store.delete(ids=[]) is False
+    assert client.index.deleted == []
+
+
+def test_delete_rejects_non_numeric_ids():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    try:
+        store.delete(ids=["abc"])
+        assert False, "Expected ValueError for non-numeric ids"
+    except ValueError as e:
+        assert "integer item IDs" in str(e)
+
+
+def test_delete_forwards_await_kwargs():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["x"])
+
+    store.delete(ids=ids, await_completion=False, timeout_s=12.0, poll_interval_s=0.5)
+    call = client.index.deleted[0]
+    assert call["await_completion"] is False
+    assert call["timeout_s"] == 12.0
+    assert call["poll_interval_s"] == 0.5
 
 
 def test_add_documents_with_explicit_vectors():
@@ -299,3 +369,840 @@ def test_add_documents_with_explicit_vectors():
     ret = store.add_documents(docs, vectors=vecs)
     assert len(ret) == 2
     assert len(client.index.inserted) == 1
+
+
+def test_add_texts_forwards_partition_name():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.add_texts(["t1"], partition_name="tenant_a")
+    assert client.index.inserted[0]["partition_name"] == "tenant_a"
+
+    store.add_texts(["t2"])
+    assert client.index.inserted[1]["partition_name"] is None
+
+
+def test_similarity_search_forwards_partition_names():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.similarity_search("q", k=1, partition_names=["p1", "p2"])
+    assert client.index.searched[0]["partition_names"] == ["p1", "p2"]
+
+    store.similarity_search_with_score("q", k=1)
+    assert client.index.searched[1]["partition_names"] is None
+
+
+def test_delete_forwards_partition_name():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["x"])
+
+    store.delete(ids=ids, partition_name="tenant_a")
+    assert client.index.deleted[0]["partition_name"] == "tenant_a"
+
+
+def test_update_metadata_builds_metadata_only_update_items():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["old"], metadatas=[{"v": 1}])
+
+    result = store.update_metadata(ids, ["new"], metadatas=[{"v": 2}])
+    assert result == {"request_id": ["req-upd-1"], "not_found_item_ids": []}
+
+    call = client.index.updates[0]
+    assert [it.item_id for it in call["items"]] == [int(x) for x in ids]
+    # Metadata-only: the vector must stay unset so the SDK leaves it in place
+    assert call["items"][0].vector is None
+    assert '"new"' in call["items"][0].metadata
+    assert '"v": 2' in call["items"][0].metadata
+    assert call["partition_name"] is None
+    # Updates wait for the rebuilt rows to become searchable by default
+    assert call["await_completion"] is True
+
+
+def test_update_metadata_validates_lengths_and_ids():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    assert store.update_metadata([], []) == {
+        "request_id": [],
+        "not_found_item_ids": [],
+    }
+
+    try:
+        store.update_metadata([1, 2], ["only-one"])
+        assert False, "Expected ValueError for length mismatch"
+    except ValueError as e:
+        assert "equal length" in str(e)
+
+    try:
+        store.update_metadata(["abc"], ["t"])
+        assert False, "Expected ValueError for non-numeric ids"
+    except ValueError as e:
+        assert "integer item IDs" in str(e)
+
+    assert client.index.updates == []
+
+
+def test_update_documents_replaces_vector_and_metadata():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["old"])
+
+    docs = [LC_Document(page_content="fresh", metadata={"k": "v"})]
+    result = store.update_documents(ids, docs, partition_name="p1")
+    assert result["request_id"] == ["req-upd-1"]
+    assert result["not_found_item_ids"] == []
+
+    item = client.index.updates[0]["items"][0]
+    assert item.item_id == int(ids[0])
+    # page_content is re-embedded, so the vector is replaced too
+    assert item.vector == FakeEmbeddings(dim=4).embed_documents(["fresh"])[0]
+    assert '"fresh"' in item.metadata
+    assert client.index.updates[0]["partition_name"] == "p1"
+
+
+def test_update_documents_metadata_only_skips_embedding():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=None, client=client)
+    docs = [LC_Document(page_content="fresh", metadata={"k": "v"})]
+
+    # No embeddings configured: vector replacement must be opted out of
+    store.update_documents([7], docs, update_vectors=False)
+    assert client.index.updates[0]["items"][0].vector is None
+
+    try:
+        store.update_documents([7], docs)
+        assert False, "Expected ValueError when a vector update has no embeddings"
+    except ValueError as e:
+        assert "update_vectors=False" in str(e)
+
+
+def test_upsert_documents_routes_by_id_presence():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    docs = [
+        LC_Document(page_content="keep", metadata={}),
+        LC_Document(page_content="new", metadata={}),
+    ]
+    result = store.upsert_documents(docs, ids=[42, None])
+
+    items = client.index.upserts[0]["items"]
+    assert [it.item_id for it in items] == [42, None]
+    # The id-less entry is the only one the server issues an id for
+    assert result["inserted_item_ids"] == [1]
+    assert result["not_found_item_ids"] == []
+
+
+def test_upsert_documents_without_ids_inserts_everything():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    docs = [LC_Document(page_content="a"), LC_Document(page_content="b")]
+    result = store.upsert_documents(docs)
+
+    assert [it.item_id for it in client.index.upserts[0]["items"]] == [None, None]
+    assert result["inserted_item_ids"] == [1, 2]
+
+
+def test_upsert_documents_validates_lengths():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    assert store.upsert_documents([]) == {
+        "request_id": [],
+        "inserted_item_ids": [],
+        "not_found_item_ids": [],
+    }
+
+    try:
+        store.upsert_documents([LC_Document(page_content="a")], ids=[1, 2])
+        assert False, "Expected ValueError for length mismatch"
+    except ValueError as e:
+        assert "equal length" in str(e)
+
+    assert client.index.upserts == []
+
+
+def test_mutation_calls_are_chunked_to_the_sdk_cap():
+    from langchain_envector import vectorstore as vs_mod
+
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    cap = vs_mod.MAX_MUTATION_ITEMS_PER_CALL
+    n = cap + 3
+    ids = list(range(1, n + 1))
+    store.update_metadata(ids, [f"t{i}" for i in ids])
+
+    assert [len(c["items"]) for c in client.index.updates] == [cap, 3]
+    assert (
+        len(client.index.updates[0]["items"]) + len(client.index.updates[1]["items"])
+        == n
+    )
+
+
+def test_writes_load_the_index_first():
+    client = FakeClient()
+    index = client.index
+    assert index.is_loaded is False
+
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    # delete/update/search all require a loaded index (1.5 and 1.6 alike)
+    store.delete(ids=[1])
+    assert index.load_calls == 1
+    assert index.is_loaded is True
+
+
+def test_add_texts_does_not_wait_but_can_be_asked_to():
+    # Inserted rows are published by Index.insert's own load step, so the extra
+    # merge-and-save wait buys no visibility and is off by default.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.add_texts(["t1"])
+    call = client.index.inserted[0]
+    assert call["await_completion"] is False
+    # WriteSettings.timeout_s is sized for delete/update; an insert keeps the
+    # SDK's own day-long budget unless the caller passes one.
+    assert call["timeout_s"] == 86400.0
+
+    store.add_texts(["t2"], await_completion=True, timeout_s=30)
+    assert client.index.inserted[1]["await_completion"] is True
+    assert client.index.inserted[1]["timeout_s"] == 30
+
+
+def test_add_texts_passes_sdk_tuning_knobs_through_kwargs():
+    # execute_until / n_workers / use_row_insert are the SDK's own knobs; they
+    # are not mirrored in WriteSettings, they just travel through **kwargs.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.add_texts(["t1"], execute_until="flush", n_workers=4, use_row_insert=True)
+    call = client.index.inserted[0]
+    assert call["execute_until"] == "flush"
+    assert call["n_workers"] == 4
+    assert call["use_row_insert"] is True
+
+
+def test_partition_management_helpers():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.create_partition("p1")
+    store.create_partition("p2")
+    names = [p["name"] for p in store.list_partitions()]
+    assert names == ["p1", "p2"]
+
+    store.drop_partition("p1")
+    names = [p["name"] for p in store.list_partitions()]
+    assert names == ["p2"]
+
+
+class _RaisingIndex(FakeIndex):
+    error: Exception = RuntimeError("unset")
+
+    def search(self, *args, **kwargs):
+        raise self.error
+
+
+def test_search_returns_empty_when_the_index_has_no_shards():
+    # Deleting every row leaves no shards, and the backend answers a search with
+    # NotFound instead of an empty result. An emptied store must still search
+    # empty, like a never-populated one.
+    index = _RaisingIndex()
+    index.is_loaded = True
+    index.row_count = 0  # the server agrees the index holds nothing
+    index.error = RuntimeError(
+        "Failed to perform Inner Product: rpc error: code = NotFound desc = "
+        "shard list for index lc_idx is empty | Request ID: abc"
+    )
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+
+    assert store.similarity_search("q", k=2) == []
+    assert store.similarity_search_with_score("q", k=2) == []
+
+
+def test_search_reraises_shard_error_when_the_index_still_has_rows():
+    # The same message over live data must NOT be reported as "no matches":
+    # that would turn a transient backend error into silent data loss.
+    index = _RaisingIndex()
+    index.is_loaded = True
+    index.row_count = 42
+    index.error = RuntimeError(
+        "Failed to perform Inner Product: rpc error: code = NotFound desc = "
+        "shard list for index lc_idx is empty | Request ID: abc"
+    )
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+
+    try:
+        store.similarity_search("q", k=2)
+        assert False, "Expected the error to propagate while rows remain"
+    except RuntimeError as e:
+        assert "shard list for index" in str(e)
+
+
+def test_search_reraises_other_backend_errors():
+    index = _RaisingIndex()
+    index.is_loaded = True
+    index.error = RuntimeError("Inner Product failed: connection reset by peer")
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+
+    try:
+        store.similarity_search("q", k=2)
+        assert False, "Expected the backend error to propagate"
+    except RuntimeError as e:
+        assert "connection reset" in str(e)
+
+
+def test_from_texts_forwards_add_texts_kwargs():
+    # from_texts used to drop everything but texts/metadatas/ids, so a store
+    # without embeddings could not be seeded at all.
+    client = FakeClient()
+    store = Envector.from_texts(
+        ["a", "b"],
+        metadatas=[{"n": 1}, {"n": 2}],
+        embeddings=None,
+        config=_cfg(),
+        client=client,
+        vectors=[[1.0, 0, 0, 0], [0, 1.0, 0, 0]],
+        partition_name="tenant_a",
+        await_completion=False,
+    )
+    call = store.client.index.inserted[0]
+    assert call["data"] == [[1.0, 0, 0, 0], [0, 1.0, 0, 0]]
+    assert call["partition_name"] == "tenant_a"
+    assert call["await_completion"] is False
+
+
+def test_from_documents_forwards_add_texts_kwargs():
+    client = FakeClient()
+    docs = [LC_Document(page_content="a"), LC_Document(page_content="b")]
+    store = Envector.from_documents(
+        docs,
+        embeddings=None,
+        config=_cfg(),
+        client=client,
+        vectors=[[1.0, 0, 0, 0], [0, 1.0, 0, 0]],
+    )
+    assert store.client.index.inserted[0]["data"] == [
+        [1.0, 0, 0, 0],
+        [0, 1.0, 0, 0],
+    ]
+
+
+def test_mutation_waits_for_unmerged_inserts_first():
+    # Updating a row whose insert has not merged makes it vanish from search on
+    # a real server, so the merge wait is paid here rather than on every insert.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    ids = store.add_texts(["a"], partition_name="tenant_a")
+    assert client.index.stage_waits == []  # the insert itself never waits
+
+    # Updates only reach rows of the partition they name, so the update names it.
+    store.update_metadata(ids, ["b"], partition_name="tenant_a")
+    wait = client.index.stage_waits[0]
+    assert wait["target_stage"] == "segmentation"
+    assert wait["partition_name"] == "tenant_a"
+    assert wait["request_ids"] == ["req-ins-1"]
+
+    # Drained: a second mutation does not wait again.
+    store.update_metadata(ids, ["c"], partition_name="tenant_a")
+    assert len(client.index.stage_waits) == 1
+
+
+def test_awaited_inserts_leave_nothing_to_drain():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    ids = store.add_texts(["a"], await_completion=True)
+    store.update_metadata(ids, ["b"])
+    assert client.index.stage_waits == []
+
+
+def test_failed_drain_keeps_the_pending_inserts():
+    class _FailingWait(FakeIndex):
+        def wait_for_insert_stage(self, *args, **kwargs):
+            raise RuntimeError("merge status unavailable")
+
+    client = FakeClient(_FailingWait())
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["a"])
+
+    try:
+        store.update_metadata(ids, ["b"])
+        assert False, "Expected the drain failure to propagate"
+    except RuntimeError as e:
+        assert "merge status unavailable" in str(e)
+
+    # Still pending, so the next mutation retries instead of mutating unmerged rows
+    assert store._pending_inserts
+    assert client.index.updates == []
+
+
+def test_drain_uses_its_own_timeout_budget():
+    # The drain waits for every un-awaited insert batch and the server merges
+    # them one at a time, so it must not share the per-call timeout.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    ids = store.add_texts(["a"])
+
+    store.update_metadata(ids, ["b"])
+    wait = client.index.stage_waits[0]
+    assert wait["timeout_s"] == store.config.write.drain_timeout_s
+    assert wait["timeout_s"] > store.config.write.timeout_s
+
+
+# ---------------------------------------------------------------------------
+# add_texts / add_documents with ids: LangChain's "add or update", as far as
+# enVector allows. Integer item IDs update in place via upsert; anything the
+# server cannot honour is inserted fresh, with a warning, and the returned
+# list says what is really in the index.
+# ---------------------------------------------------------------------------
+
+
+def test_add_documents_with_item_ids_updates_in_place():
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    first = store.add_texts(["v1", "w1"])  # -> ["1", "2"]
+
+    docs = [
+        LC_Document(page_content="v2", metadata={"rev": 2}),
+        LC_Document(page_content="w2", metadata={"rev": 2}),
+    ]
+    ret = store.add_documents(docs, ids=[str(first[0]), first[1]])
+
+    # Same IDs come back, nothing new was inserted, and the change went through
+    # the upsert arm addressed by those IDs.
+    assert ret == first
+    assert len(index.inserted) == 1
+    assert len(index.upserts) == 1
+    assert [it.item_id for it in index.upserts[0]["items"]] == [int(x) for x in first]
+    assert '"v2"' in index.upserts[0]["items"][0].metadata
+
+
+def test_add_documents_reuses_the_ids_search_results_carry():
+    # Base-class behaviour: with no ids kwarg, Documents that carry an `id`
+    # supply it. Re-adding a search hit must therefore overwrite, not duplicate.
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    store.add_texts(["hello"])  # -> ["1"]
+
+    hit = store.similarity_search("q", k=1)[0]  # FakeIndex returns id 1
+    assert hit.id == "1"
+    hit.page_content = "hello, edited"
+
+    ret = store.add_documents([hit])
+
+    assert ret == ["1"]
+    assert len(index.inserted) == 1
+    assert len(index.upserts) == 1
+
+
+def test_add_texts_mixed_ids_insert_none_slots_and_update_the_rest():
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    existing = store.add_texts(["old"])  # -> ["1"]
+
+    ret = store.add_texts(
+        ["new-a", "old-edited", "new-b"], ids=[None, existing[0], None]
+    )
+
+    # None slots were inserted (server-issued 2, 3 in order), the ID slot updated.
+    assert ret == ["2", "1", "3"]
+    items = index.upserts[0]["items"]
+    assert [it.item_id for it in items] == [None, 1, None]
+
+
+def test_add_texts_ids_naming_no_live_row_are_inserted_with_a_warning():
+    class _NotFoundIndex(FakeIndex):
+        def upsert(self, items, **kw):
+            result = super().upsert(items, **kw)
+            result["not_found_item_ids"] = [
+                it.item_id for it in items if it.item_id == 99
+            ]
+            return result
+
+    index = _NotFoundIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    live = store.add_texts(["live"])  # -> ["1"]
+
+    with pytest.warns(UserWarning, match="match no live row"):
+        ret = store.add_texts(["live-edited", "ghost"], ids=[live[0], 99])
+
+    # The live one was updated under its ID; the ghost got a fresh server ID.
+    assert ret[0] == "1"
+    assert ret[1] not in ("1", "99")
+    assert len(index.inserted) == 2  # initial insert + the re-insert of the ghost
+
+
+def test_add_texts_rejects_ids_of_the_wrong_length():
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient()
+    )
+    with pytest.raises(ValueError, match="equal length"):
+        store.add_texts(["a", "b"], ids=[1])
+
+
+# ---------------------------------------------------------------------------
+# from_texts / from_documents take `embedding` as the second positional
+# argument like every other LangChain vector store. `embeddings=` stays as a
+# keyword alias.
+# ---------------------------------------------------------------------------
+
+
+def test_from_texts_accepts_the_standard_positional_embedding():
+    client = FakeClient()
+    emb = FakeEmbeddings(dim=4)
+
+    store = Envector.from_texts(
+        ["A", "B"], emb, [{"m": "a"}, {"m": "b"}], config=_cfg(), client=client
+    )
+
+    assert store._embeddings is emb
+    inserted = client.index.inserted[0]
+    assert inserted["data"] == emb.embed_documents(["A", "B"])
+    assert len(inserted["metadata"]) == 2
+
+
+def test_from_documents_accepts_the_standard_positional_embedding():
+    client = FakeClient()
+    emb = FakeEmbeddings(dim=4)
+    docs = [LC_Document(page_content="A", metadata={"m": 1})]
+
+    store = Envector.from_documents(docs, emb, config=_cfg(), client=client)
+
+    assert store._embeddings is emb
+    assert len(client.index.inserted[0]["metadata"]) == 1
+
+
+def test_from_texts_rejects_conflicting_embedding_arguments():
+    with pytest.raises(ValueError, match="not both"):
+        Envector.from_texts(
+            ["A"],
+            FakeEmbeddings(dim=4),
+            embeddings=FakeEmbeddings(dim=4),
+            config=_cfg(),
+            client=FakeClient(),
+        )
+
+
+def test_from_texts_explains_the_old_positional_metadatas_shape():
+    # Before the signature change the second positional argument was
+    # `metadatas`. That call shape now fails with a message that says so.
+    with pytest.raises(TypeError, match="metadatas by keyword"):
+        Envector.from_texts(
+            ["A"],
+            [{"m": 1}],
+            embeddings=FakeEmbeddings(dim=4),
+            config=_cfg(),
+            client=FakeClient(),
+        )
+
+
+async def test_afrom_texts_and_afrom_documents_go_through_the_inherited_wrappers():
+    # The base class calls cls.from_texts(texts, embedding, metadatas, **kwargs)
+    # positionally — the call that used to TypeError.
+    emb = FakeEmbeddings(dim=4)
+
+    c1 = FakeClient()
+    s1 = await Envector.afrom_texts(
+        ["A", "B"], emb, [{"m": 1}, {"m": 2}], config=_cfg(), client=c1
+    )
+    assert isinstance(s1, Envector)
+    assert len(c1.index.inserted[0]["metadata"]) == 2
+
+    c2 = FakeClient()
+    s2 = await Envector.afrom_documents(
+        [LC_Document(page_content="A", metadata={})], emb, config=_cfg(), client=c2
+    )
+    assert isinstance(s2, Envector)
+    assert len(c2.index.inserted[0]["metadata"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# `embeddings` property
+# ---------------------------------------------------------------------------
+
+
+def test_embeddings_property_exposes_the_configured_embedder():
+    emb = FakeEmbeddings(dim=4)
+    store = Envector(config=_cfg(), embeddings=emb, client=FakeClient())
+    assert store.embeddings is emb
+
+
+def test_embeddings_property_is_none_without_embeddings():
+    store = Envector(config=_cfg(), embeddings=None, client=FakeClient())
+    assert store.embeddings is None
+
+
+def test_retriever_tracing_sees_the_embedding_provider():
+    # VectorStoreRetriever reads `vectorstore.embeddings` for LangSmith's
+    # ls_embedding_provider — the first consumer that noticed it was None.
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient()
+    )
+    params = store.as_retriever()._get_ls_params()
+    assert params.get("ls_embedding_provider") == "FakeEmbeddings"
+
+
+# ---------------------------------------------------------------------------
+# Found by the pre-review audit
+# ---------------------------------------------------------------------------
+
+
+def test_add_texts_with_ids_keeps_insert_knobs_off_the_upsert():
+    # Index.upsert takes none of Index.insert's knobs; they must only reach the
+    # rows this call inserts (FakeIndex.upsert, like the SDK, rejects extras).
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    existing = store.add_texts(["old"])
+
+    ret = store.add_texts(
+        ["edited", "fresh"],
+        ids=[existing[0], None],
+        execute_until="flush",
+        request_ids=[],
+    )
+
+    assert ret[0] == existing[0]
+    assert len(index.upserts) == 1
+
+
+def test_flush_inserts_are_not_queued_for_the_merge_drain():
+    # execute_until="flush" submits no merge, so waiting for one would block
+    # for the whole drain budget.
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+
+    store.add_texts(["a"], execute_until="flush")
+    assert store._pending_inserts == {}
+
+    store.add_texts(["b"])
+    assert store._pending_inserts == {None: ["req-ins-2"]}
+
+
+def test_upsert_inserts_are_queued_for_the_merge_drain():
+    # Rows the upsert arm inserts merge like any other insert.
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    existing = store.add_texts(["old"], await_completion=True)
+
+    store.add_texts(
+        ["new", "old-edited"], ids=[None, existing[0]], await_completion=False
+    )
+
+    assert store._pending_inserts == {None: ["req-ups-1-ins"]}
+
+
+def test_drain_only_waits_for_the_mutated_partition():
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    store.add_texts(["a"], partition_name="tenant_a")
+    ids_b = store.add_texts(["b"], partition_name="tenant_b")
+
+    store.update_metadata(ids_b, ["b2"], partition_name="tenant_b")
+
+    assert [w["partition_name"] for w in index.stage_waits] == ["tenant_b"]
+    assert list(store._pending_inserts) == ["tenant_a"]  # still queued
+
+
+def test_drain_ignores_the_callers_per_call_timeout():
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    ids = store.add_texts(["a"])
+
+    store.update_metadata(ids, ["b"], timeout_s=5)
+
+    assert index.stage_waits[0]["timeout_s"] == store.config.write.drain_timeout_s
+    assert index.updates[0]["timeout_s"] == 5
+
+
+def test_delete_drops_repeated_ids():
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    ids = store.add_texts(["a", "b"])
+
+    assert store.delete([ids[0], ids[0], ids[1]]) is True
+    assert index.deleted[0]["item_ids"] == [1, 2]
+
+
+def test_update_rejects_repeated_and_non_positive_ids_before_the_sdk():
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient()
+    )
+    with pytest.raises(ValueError, match="unique"):
+        store.update_metadata(["1", "1"], ["a", "b"])
+    with pytest.raises(ValueError, match="positive"):
+        store.update_metadata(["0"], ["a"])
+
+
+def test_zero_is_not_an_item_id():
+    # Chunk-index style ids start at 0; the server never issues 0, so it is a
+    # foreign id — inserted with a warning, not an SDK validation error.
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    with pytest.warns(UserWarning, match="not enVector item IDs"):
+        ret = store.add_texts(["a"], ids=["0"])
+    assert ret == ["1"]
+    assert index.upserts == []
+
+
+def test_from_documents_uses_document_ids_like_add_documents():
+    index = FakeIndex()
+    docs = [LC_Document(page_content="a", metadata={}, id="7")]
+
+    Envector.from_documents(
+        docs, FakeEmbeddings(dim=4), config=_cfg(), client=FakeClient(index)
+    )
+
+    # The id reached the store as an item ID (upsert arm) instead of being dropped.
+    assert [it.item_id for it in index.upserts[0]["items"]] == [7]
+
+
+def test_search_params_reach_the_sdk_and_unknown_kwargs_do_not_vanish():
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+
+    store.similarity_search("q", k=1, search_params={"nprobe": 64})
+    assert index.searched[-1]["search_params"] == {"nprobe": 64}
+
+    store.similarity_search_by_vector([0.0] * 4, k=1, search_params={"nprobe": 8})
+    assert index.searched[-1]["search_params"] == {"nprobe": 8}
+
+    with pytest.raises(TypeError, match="nprobe"):
+        store.similarity_search("q", k=1, nprobe=64)  # not a known argument
+
+
+def test_re_adding_a_scored_hit_stores_only_user_metadata():
+    # Search results carry their id on Document.id and nothing else internal,
+    # so the read-edit-write round trip must not grow the stored payload.
+    index = FakeIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    store.add_texts(["hello"])  # -> ["1"]; FakeIndex.search returns id 1
+
+    hit, _score = store.similarity_search_with_score("q", k=1)[0]
+    hit.page_content = "hello, edited"
+    store.add_documents([hit])
+
+    stored = index.upserts[0]["items"][0].metadata
+    assert "_score" not in stored and "_id" not in stored
+
+
+def _store(index=None, *, with_embeddings=True):
+    index = index or ScoringFakeIndex()
+    emb = LookupEmbeddings() if with_embeddings else None
+    return Envector(config=_cfg(), embeddings=emb, client=FakeClient(index)), index
+
+
+def _texts(docs):
+    return [d.page_content for d in docs]
+
+
+# ---------------------------------------------------------------------------
+# Relevance scores — (1 + inner product) / 2, see _select_relevance_score_fn
+# ---------------------------------------------------------------------------
+
+
+def test_relevance_scores_stay_in_the_unit_interval_and_keep_rank_order():
+    store, _ = _store()
+
+    # The base class warns when a score leaves [0, 1]; treat that as failure.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        pairs = store.similarity_search_with_relevance_scores("q", k=5)
+
+    assert _texts([d for d, _ in pairs]) == [
+        "apple pie",
+        "apple tart",
+        "bicycle",
+        "harbour",
+        "antimatter",
+    ]
+    scores = [s for _, s in pairs]
+    assert all(0.0 <= s <= 1.0 for s in scores), scores
+    # Raw inner products 1.0 > 0.995 > 0 == 0 > -0.5 must map monotonically.
+    assert scores[0] > scores[1] > scores[2] == scores[3] > scores[4], scores
+
+
+def test_relevance_score_threshold_cuts_below_the_given_relevance():
+    store, _ = _store()
+
+    pairs = store.similarity_search_with_relevance_scores("q", k=5)
+    cutoff = pairs[1][1]  # relevance of "apple tart"
+
+    kept = store.similarity_search_with_relevance_scores(
+        "q", k=5, score_threshold=cutoff
+    )
+    assert _texts([d for d, _ in kept]) == ["apple pie", "apple tart"]
+    assert all(s >= cutoff for _, s in kept)
+
+
+def test_search_dispatches_similarity_score_threshold():
+    store, _ = _store()
+
+    docs = store.search("q", "similarity_score_threshold", k=5, score_threshold=0.9)
+
+    assert docs, "expected at least the exact match to clear a 0.9 threshold"
+    assert docs[0].page_content == "apple pie"
+    assert "antimatter" not in _texts(docs)
+    assert "_score" not in docs[0].metadata and "_id" not in docs[0].metadata
+
+
+def test_retriever_with_similarity_score_threshold_returns_documents():
+    store, _ = _store()
+    retriever = store.as_retriever(
+        search_type="similarity_score_threshold",
+        search_kwargs={"score_threshold": 0.9, "k": 5},
+    )
+
+    docs = retriever.invoke("q")
+
+    assert docs and docs[0].page_content == "apple pie"
+    assert "antimatter" not in _texts(docs)
+
+
+async def test_async_relevance_scores_match_sync():
+    store, _ = _store()
+
+    sync_pairs = store.similarity_search_with_relevance_scores("q", k=3)
+    async_pairs = await store.asimilarity_search_with_relevance_scores("q", k=3)
+
+    assert [(d.page_content, s) for d, s in async_pairs] == [
+        (d.page_content, s) for d, s in sync_pairs
+    ]

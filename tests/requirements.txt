@@ -4,9 +4,9 @@
 pytest
 pytest-asyncio
 
-# pyenvector SDK — install from local wheel at repo root
-# Use a direct wheel path (no PEP 508 direct reference) for maximum pip compatibility.
-pyenvector
+# pyenvector SDK. 1.6.0rc1 is a pre-release, but naming it in the specifier is
+# enough for pip to consider it — no --pre needed.
+pyenvector>=1.6.0rc1
 
 # Note: LangChain is optional for tests. Integration tests will fall back to
 # sentence-transformers if LangChain embeddings are unavailable.
