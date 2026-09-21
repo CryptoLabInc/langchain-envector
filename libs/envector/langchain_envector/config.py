@@ -52,14 +52,23 @@ class WriteSettings:
     rebuilt, so those wait by default. Set a flag to ``False`` for
     fire-and-forget bulk work and wait once at the end.
 
-    Only the waiting is configured here; the SDK's per-call knobs
-    (``execute_until``, ``n_workers``, ``use_row_insert``, ...) reach
-    ``Index.insert`` through ``add_texts(**kwargs)``.
+    ``use_row_insert`` picks the insert path for calls smaller than the index
+    dimension: on (default), they go on EnVector's row-insert path, which
+    uploads about 60 KB per document instead of one block sized by the
+    dimension (31.5 MB at dim 1024) — cheaper on the wire, slower per
+    document. Calls at or above the dimension always go bulk. Turn it off
+    where the client sits next to the server and latency matters more than
+    traffic. ``docs/insert-modes.md`` has the measurements; ``add_texts`` can
+    override it per call.
+
+    The SDK's other per-call knobs (``execute_until``, ``n_workers``, ...)
+    reach ``Index.insert`` through ``add_texts(**kwargs)``.
     """
 
     await_insert: bool = False
     await_delete: bool = True
     await_update: bool = True
+    use_row_insert: bool = True
 
     # Polling budget for the delete/update/upsert waits. Inserts keep the
     # SDK's own budget (a day) unless `timeout_s` is passed to add_texts.

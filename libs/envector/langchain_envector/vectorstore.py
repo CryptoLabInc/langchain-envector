@@ -169,25 +169,38 @@ class Envector(VectorStore):
             index.load()
         return index
 
-    def _resolve_row_insert(self, use_row_insert: bool, n_rows: int) -> bool:
-        """Honour ``use_row_insert`` only where EnVector actually applies it.
+    def _resolve_row_insert(self, use_row_insert: Optional[bool], n_rows: int) -> bool:
+        """Decide the insert path for a call of ``n_rows`` rows.
 
-        The server takes the row-insert path for a batch of fewer rows than the
-        index dimension; at or above that it inserts in bulk and says nothing.
-        A caller who asked for the row path deliberately should hear that it did
-        not happen, so the silent fallback becomes a warning here.
+        ``None`` takes the store's default (``config.write.use_row_insert``, on
+        unless the deployment turned it off); an explicit bool wins over it.
+
+        EnVector applies the row path only to a batch of fewer rows than the
+        index dimension. It decides that per 4096-row encryption chunk, so a
+        large call whose last chunk happens to be short would send that tail on
+        the row path — at ~2 s per row server-side, a 900-row tail is half an
+        hour. Deciding here on the whole call keeps it to what the rule means:
+        a call below ``dim`` goes row, a call at or above it goes bulk, never
+        a mix. A caller who asked for the row path explicitly and cannot have
+        it hears so, instead of a silent fallback.
         """
+        if use_row_insert is None:
+            use_row_insert = self.config.write.use_row_insert
+            explicit = False
+        else:
+            explicit = True
         if not use_row_insert:
             return False
         dim = self.config.index.dim
         if n_rows >= dim:
-            warnings.warn(
-                f"use_row_insert=True was ignored: EnVector takes the row-insert path only "
-                f"for batches smaller than the index dimension, and this call carries "
-                f"{n_rows} rows at dim {dim}. The rows were inserted on the bulk path.",
-                UserWarning,
-                stacklevel=3,
-            )
+            if explicit:
+                warnings.warn(
+                    f"use_row_insert=True was ignored: EnVector takes the row-insert path only "
+                    f"for batches smaller than the index dimension, and this call carries "
+                    f"{n_rows} rows at dim {dim}. The rows were inserted on the bulk path.",
+                    UserWarning,
+                    stacklevel=3,
+                )
             return False
         return True
 
@@ -203,7 +216,7 @@ class Envector(VectorStore):
         vectors: Optional[List[List[float]]] = None,
         partition_name: Optional[str] = None,
         await_completion: Optional[bool] = None,
-        use_row_insert: bool = False,
+        use_row_insert: Optional[bool] = None,
         **kwargs: Any,
     ) -> List[str]:
         """Add texts to the index and return their item IDs.
@@ -216,15 +229,17 @@ class Envector(VectorStore):
         ``Index.insert`` and apply to the rows this call inserts; the upsert
         arm below takes only ``timeout_s`` / ``poll_interval_s``.
 
-        ``use_row_insert`` picks EnVector's row-insert path instead of the
-        default bulk one. The bulk path uploads one block per call, sized by
-        the index dimension rather than by the number of rows, so the row path
-        is the cheaper one for a small call over a slow link; on a fast link it
-        is not, and it never makes rows searchable sooner. It does let a very
-        small call finish merging sooner. ``docs/insert-modes.md`` has both
-        boundaries. EnVector applies the row path only below ``dim`` rows;
-        asking for it with more raises a ``UserWarning`` rather than quietly
-        inserting in bulk.
+        ``use_row_insert`` chooses between EnVector's two insert paths. By
+        default (``None``, and ``config.write.use_row_insert`` left on) a call
+        of fewer documents than the index dimension takes the row path, which
+        uploads about 60 KB per document, and a larger call takes the bulk
+        path, which uploads one block sized by the dimension (31.5 MB at
+        dim 1024) however many documents it carries. The row path is slower
+        per document, so the split favours traffic over latency;
+        ``docs/insert-modes.md`` has the measurements. Pass ``False`` to force
+        bulk for a call, or set ``WriteSettings.use_row_insert=False`` for the
+        whole store. Passing ``True`` for a call at or above ``dim`` rows
+        raises a ``UserWarning``, since EnVector cannot honour it.
 
         ``ids`` follows LangChain's add-or-update contract as far as enVector
         allows: an entry that is an item ID (int or numeric str, such as the

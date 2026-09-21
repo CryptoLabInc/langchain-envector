@@ -14,26 +14,36 @@ Asking for it with more raises a `UserWarning`, and those documents go in on the
 
 ## Short answer
 
-**If your client and your EnVector server are on the same fast network, leave `use_row_insert`
-off.** It does not make the call return sooner and does not make the documents searchable sooner —
-not even for a single document, where the two paths come out within about 10% of each other. From
-two documents up it is 1.5× to 5× slower.
+**The default already does the split for you.** A call of fewer documents than the index
+dimension goes on the row path; a call of that many or more goes bulk. The reason is traffic: the
+bulk block is sized by the dimension, not by the documents, so adding one document to a dim-1024
+index on the bulk path uploads 31.5 MB, while the row path uploads 61.5 KB. The split is on by
+default because EnVector deployments generally care more about what crosses the network than about
+how long a small insert takes.
 
-**If your client reaches the server over a slow link, turn it on for small calls.** The bulk path
-uploads a block whose size comes from the index dimension, not from how many documents you are
-adding: at dim 1024 that is 31.5 MB per call, whether it carries one document or a thousand. The
-row path uploads 61.5 KB per document. Below about 100 Mbps that difference decides the question on
-its own — see "What each path uploads".
+What it costs is latency. The row path spends about 2 s of server time per document at dim 1024
+(0.7 s at dim 256, 3.2 s at dim 1536), so a call of 8 documents takes 19 s on the row path against
+4 s on the bulk path, and a call of 500 documents at dim 1024 would take around 18 minutes where
+bulk takes 4 s. Documents become searchable a fraction of a second after the call returns on both
+paths, so this is the call's own duration, not visibility.
+
+**If your client sits next to the server and latency matters more than traffic, turn it off** —
+per store or per call:
+
+```python
+cfg = EnvectorConfig(..., write=WriteSettings(use_row_insert=False))   # whole store: always bulk
+store.add_documents(docs, use_row_insert=False)                         # this call: bulk
+store.add_documents(docs, use_row_insert=True)                          # this call: row if below dim
+```
 
 Whichever you use, the documents end up occupying the same space in the index: small inserts are
 folded into the last partially-filled shard, so adding a few at a time does not leave the index
 fragmented or larger. The extra bytes each path writes while a call is in flight are reclaimed
 shortly afterwards.
 
-The other thing the row path buys is that the index **finishes merging** sooner after a very small
-call. That is worth something only if you wait for the merge: you pass `await_completion=True`, or
-you call `update_documents` / `upsert_documents` soon after inserting, which waits for that store's
-pending inserts to merge first. In that case:
+The row path also lets the index **finish merging** sooner after a very small call — which you
+notice only if you wait for the merge with `await_completion=True`, or call `update_documents` /
+`upsert_documents` right after inserting:
 
 | index dim | row finishes merging sooner for a call of up to |
 |---|---|
@@ -43,14 +53,6 @@ pending inserts to merge first. In that case:
 | 768 | 2 documents |
 | 1024 | 2 documents |
 | 1536 | no size — use bulk |
-
-```python
-# client next to the server: the default path, however few documents you add
-store.add_documents(new_docs)
-
-# client across a network, adding a few documents: avoid uploading a full block
-store.add_documents(new_docs, use_row_insert=True)
-```
 
 ## The measurements
 

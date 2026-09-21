@@ -9,6 +9,7 @@ from langchain_envector.config import (
     EnvectorConfig,
     IndexSettings,
     KeyConfig,
+    WriteSettings,
 )
 from langchain_envector.vectorstore import Envector, Document as LC_Document
 
@@ -577,7 +578,7 @@ def test_add_texts_does_not_wait_but_can_be_asked_to():
 def test_add_texts_passes_sdk_tuning_knobs_through_kwargs():
     # execute_until / n_workers are the SDK's own knobs; they are not mirrored
     # in WriteSettings, they just travel through **kwargs. use_row_insert is a
-    # named parameter instead, because we have to check it against dim.
+    # named parameter instead, because we decide it against dim.
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
@@ -588,29 +589,49 @@ def test_add_texts_passes_sdk_tuning_knobs_through_kwargs():
     assert call["use_row_insert"] is True
 
 
-def test_add_texts_defaults_to_the_bulk_insert_path():
-    # The row path is opt-in: which one is faster depends on the batch size and
-    # the dimension, so the package does not choose for the caller.
+def test_default_is_row_insert_below_dim_and_bulk_from_dim_up():
+    # The default favours traffic: a call smaller than dim uploads ~60 KB per
+    # document on the row path instead of a dim-sized block. At dim and above
+    # EnVector cannot take the row path, so the call goes bulk — decided on the
+    # whole call, quietly, because that is the rule, not a caller's mistake.
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
-    store.add_texts(["t1", "t2"])
+    store.add_texts(["t1", "t2", "t3"])  # 3 < dim 4
+    assert client.index.inserted[0]["use_row_insert"] is True
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        store.add_texts(["t1", "t2", "t3", "t4"])  # 4 == dim
+    assert client.index.inserted[1]["use_row_insert"] is False
+
+
+def test_write_settings_can_turn_row_insert_off_and_a_call_can_override():
+    cfg = _cfg()
+    cfg.write = WriteSettings(use_row_insert=False)
+    client = FakeClient()
+    store = Envector(config=cfg, embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.add_texts(["t1"])  # store default: bulk
     assert client.index.inserted[0]["use_row_insert"] is False
 
+    store.add_texts(["t1"], use_row_insert=True)  # explicit per-call wins
+    assert client.index.inserted[1]["use_row_insert"] is True
 
-def test_row_insert_is_refused_and_reported_at_or_above_dim():
+    store2 = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    store2.add_texts(["t1"], use_row_insert=False)  # and the other way round
+    assert client.index.inserted[2]["use_row_insert"] is False
+
+
+def test_explicit_row_insert_is_refused_and_reported_at_or_above_dim():
     # enVector applies the row path only below `dim` rows and silently inserts
-    # in bulk otherwise. Say so rather than letting the caller believe it ran.
+    # in bulk otherwise. A caller who asked for it explicitly hears that.
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
     with pytest.warns(UserWarning, match="row-insert path only"):
         store.add_texts(["t1", "t2", "t3", "t4"], use_row_insert=True)  # dim is 4
     assert client.index.inserted[0]["use_row_insert"] is False
-
-    # one row under the limit still takes it
-    store.add_texts(["t1", "t2", "t3"], use_row_insert=True)
-    assert client.index.inserted[1]["use_row_insert"] is True
 
 
 def test_row_insert_reaches_the_reinsert_arm_of_add_or_update():
