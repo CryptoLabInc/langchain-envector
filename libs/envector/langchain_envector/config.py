@@ -53,13 +53,12 @@ class WriteSettings:
     fire-and-forget bulk work and wait once at the end.
 
     ``use_row_insert`` picks the insert path for calls smaller than the index
-    dimension: on (default), they go on EnVector's row-insert path, which
-    uploads about 60 KB per document instead of one block sized by the
-    dimension (31.5 MB at dim 1024) — cheaper on the wire, slower per
-    document. Calls at or above the dimension always go bulk. Turn it off
-    where the client sits next to the server and latency matters more than
-    traffic. ``docs/insert-modes.md`` has the measurements; ``add_texts`` can
-    override it per call.
+    dimension: on (default), they take EnVector's row-insert path, which sends
+    each document separately rather than one block sized by the dimension —
+    less over the network, longer per document. Calls at or above the
+    dimension always go bulk. Turn it off where the client sits next to the
+    server and latency matters more than traffic; ``add_texts`` can override
+    it per call.
 
     The SDK's other per-call knobs (``execute_until``, ``n_workers``, ...)
     reach ``Index.insert`` through ``add_texts(**kwargs)``.

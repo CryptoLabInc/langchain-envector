@@ -603,6 +603,22 @@ def test_default_is_row_insert_below_dim_and_bulk_from_dim_up():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         store.add_texts(["t1", "t2", "t3", "t4"])  # 4 == dim
+        store.add_texts(["t1", "t2", "t3", "t4", "t5"])  # 5 > dim
+    assert client.index.inserted[1]["use_row_insert"] is False
+    assert client.index.inserted[2]["use_row_insert"] is False
+
+
+def test_add_documents_forwards_use_row_insert():
+    # add_documents is the API the README shows; the knob must reach the SDK
+    # through it, not only through add_texts.
+    from langchain_core.documents import Document
+
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.add_documents([Document(page_content="a")])
+    assert client.index.inserted[0]["use_row_insert"] is True
+    store.add_documents([Document(page_content="a")], use_row_insert=False)
     assert client.index.inserted[1]["use_row_insert"] is False
 
 

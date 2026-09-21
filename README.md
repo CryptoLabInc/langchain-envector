@@ -47,7 +47,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - A row deleted moments ago can still take a top-k slot briefly, so a search right after `delete` may return fewer than `k`; pass `fetch_k` to over-fetch.
 - Filtering happens client-side after the server returns `k` hits, so filtered results can be fewer than `k`; set `fetch_k` (or `IndexSettings.fetch_k`) to over-fetch.
 - One enVector endpoint per process; all stores in a process must point at the same server.
-- Inserts of fewer documents than the index dimension take EnVector's row path, which is light on the network but slow per document (about 2 s each at dim 1024); set `WriteSettings(use_row_insert=False)` when the client is next to the server and latency matters more. [`docs/insert-modes.md`](docs/insert-modes.md) has the measurements.
+- Inserts smaller than the index dimension take EnVector's row path, which sends less over the network but takes longer per document; set `WriteSettings(use_row_insert=False)` when the client is next to the server and latency matters more.
 - Updates wait for that store's pending inserts to merge first; when interleaving inserts and updates, set `WriteSettings.await_insert=True` and use one store instance per index.
 - `update_documents` / `upsert_documents` above 10,000 items are sent in several batches; if a later batch fails, the earlier ones stay applied.
 
@@ -107,12 +107,10 @@ store.add_texts(
 )
 ```
 
-Calls smaller than the index dimension take EnVector's row-insert path, which uploads about 60 KB
-per document; larger calls take the bulk path, which uploads one block sized by the dimension
-(31.5 MB at dim 1024) however many documents it carries. The row path is slower per document, so
-the default trades latency for traffic. Small inserts are folded into the index rather than left
-as fragments. To always use bulk, set `WriteSettings(use_row_insert=False)` or pass
-`use_row_insert=False` to a call; [`docs/insert-modes.md`](docs/insert-modes.md) has the numbers.
+Calls smaller than the index dimension take EnVector's row-insert path, which sends each document
+separately; larger calls send one block sized by the dimension. The row path moves less over the
+network and takes longer per document. To always use bulk, set `WriteSettings(use_row_insert=False)`
+or pass `use_row_insert=False` to a call.
 
 ### Similarity search
 
