@@ -169,40 +169,14 @@ class Envector(VectorStore):
             index.load()
         return index
 
-    def _resolve_row_insert(self, use_row_insert: Optional[bool], n_rows: int) -> bool:
-        """Decide the insert path for a call of ``n_rows`` rows.
-
-        ``None`` takes the store's default (``config.write.use_row_insert``, on
-        unless the deployment turned it off); an explicit bool wins over it.
-
-        EnVector applies the row path only to a batch of fewer rows than the
-        index dimension. It decides that per 4096-row encryption chunk, so a
-        large call whose last chunk happens to be short would send that tail
-        row by row, which takes far longer than the bulk call it belongs to.
-        Deciding here on the whole call keeps it to what the rule means: a call
-        below ``dim`` goes row, a call at or above it goes bulk, never a mix. A
-        caller who asked for the row path explicitly and cannot have it hears
-        so, instead of a silent fallback.
-        """
+    def _resolve_row_insert(self, use_row_insert: Optional[bool]) -> bool:
+        """``None`` means the store's default (``config.write.use_row_insert``);
+        an explicit bool is passed to the SDK as given. The SDK applies its own
+        rule from there: with the flag on, a chunk of fewer rows than the index
+        dimension takes the row path and any other chunk takes bulk."""
         if use_row_insert is None:
-            use_row_insert = self.config.write.use_row_insert
-            explicit = False
-        else:
-            explicit = True
-        if not use_row_insert:
-            return False
-        dim = self.config.index.dim
-        if n_rows >= dim:
-            if explicit:
-                warnings.warn(
-                    f"use_row_insert=True was ignored: EnVector takes the row-insert path only "
-                    f"for batches smaller than the index dimension, and this call carries "
-                    f"{n_rows} rows at dim {dim}. The rows go on the bulk path instead.",
-                    UserWarning,
-                    stacklevel=3,
-                )
-            return False
-        return True
+            return bool(self.config.write.use_row_insert)
+        return bool(use_row_insert)
 
     # -------------------------------
     # VectorStore API
@@ -229,19 +203,16 @@ class Envector(VectorStore):
         ``Index.insert`` and apply to the rows this call inserts; the upsert
         arm below takes only ``timeout_s`` / ``poll_interval_s``.
 
-        ``use_row_insert`` chooses between EnVector's two insert paths. By
-        default (``None``, with ``config.write.use_row_insert`` left on) a call
-        of fewer documents than the index dimension takes the row path, which
-        sends each document separately, and a larger call takes the bulk path,
-        which sends one block whose size is set by the dimension. The row path
-        moves less over the network and takes longer per document, so the
-        default favours traffic over latency. Pass ``False`` to use bulk for a
-        call, or set ``WriteSettings.use_row_insert=False`` for the whole
-        store. Passing ``True`` for a call at or above ``dim`` rows raises a
-        ``UserWarning``, since EnVector cannot honour it. Rows that go through
-        the ``ids=`` arm are inserted by ``Index.upsert``, which offers no
-        choice of path; only its re-insert of ids that matched no live row
-        follows this argument.
+        ``use_row_insert`` is handed to ``Index.insert`` as given; ``None``
+        (default) means ``config.write.use_row_insert``, which is on. With it
+        on, EnVector inserts a call of fewer documents than the index dimension
+        one document at a time (single insert), which sends far less over the
+        network but takes longer per document, and inserts larger calls as one
+        batch. Pass ``False`` to use batch insert for a call, or set
+        ``WriteSettings.use_row_insert=False`` for the whole store. Rows that
+        go through the ``ids=`` arm are inserted by ``Index.upsert``, which
+        offers no choice of path; only its re-insert of ids that matched no
+        live row follows this argument.
 
         ``ids`` follows LangChain's add-or-update contract as far as enVector
         allows: an entry that is an item ID (int or numeric str, such as the
@@ -313,7 +284,7 @@ class Envector(VectorStore):
             partition_name=partition_name,
             request_ids=request_ids,
             await_completion=awaited,
-            use_row_insert=self._resolve_row_insert(use_row_insert, len(texts)),
+            use_row_insert=self._resolve_row_insert(use_row_insert),
             **waits,
             **kwargs,
         )
