@@ -169,13 +169,14 @@ class Envector(VectorStore):
             index.load()
         return index
 
-    def _resolve_row_insert(self, use_row_insert: Optional[bool]) -> bool:
-        """``None`` means the store's default (``config.write.use_row_insert``);
-        an explicit bool is passed to the SDK as given. The SDK applies its own
-        rule from there: with the flag on, a chunk of fewer rows than the index
-        dimension takes the row path and any other chunk takes bulk."""
+    def _resolve_row_insert(self, use_row_insert: Optional[bool], n_rows: int) -> bool:
+        """Pick the insert path: an explicit argument wins, then the store
+        setting, then the default rule — one row takes single insert, two or
+        more take batch insert."""
         if use_row_insert is None:
-            return bool(self.config.write.use_row_insert)
+            use_row_insert = self.config.write.use_row_insert
+        if use_row_insert is None:
+            return n_rows == 1
         return bool(use_row_insert)
 
     # -------------------------------
@@ -203,16 +204,12 @@ class Envector(VectorStore):
         ``Index.insert`` and apply to the rows this call inserts; the upsert
         arm below takes only ``timeout_s`` / ``poll_interval_s``.
 
-        ``use_row_insert`` is handed to ``Index.insert`` as given; ``None``
-        (default) means ``config.write.use_row_insert``, which is on. With it
-        on, EnVector inserts a call of fewer documents than the index dimension
-        one document at a time (single insert), which sends far less over the
-        network but takes longer per document, and inserts larger calls as one
-        batch. Pass ``False`` to use batch insert for a call, or set
-        ``WriteSettings.use_row_insert=False`` for the whole store. Rows that
-        go through the ``ids=`` arm are inserted by ``Index.upsert``, which
-        offers no choice of path; only its re-insert of ids that matched no
-        live row follows this argument.
+        ``use_row_insert`` selects EnVector's insert path: ``True`` uses single
+        insert, ``False`` uses batch insert. By default (``None``) a call with
+        one document uses single insert and a call with two or more documents
+        uses batch insert; ``WriteSettings.use_row_insert`` changes that
+        default for the store. Documents updated in place through ``ids`` are
+        not affected.
 
         ``ids`` follows LangChain's add-or-update contract as far as enVector
         allows: an entry that is an item ID (int or numeric str, such as the
@@ -284,7 +281,7 @@ class Envector(VectorStore):
             partition_name=partition_name,
             request_ids=request_ids,
             await_completion=awaited,
-            use_row_insert=self._resolve_row_insert(use_row_insert),
+            use_row_insert=self._resolve_row_insert(use_row_insert, len(texts)),
             **waits,
             **kwargs,
         )

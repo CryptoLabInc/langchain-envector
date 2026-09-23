@@ -589,33 +589,44 @@ def test_add_texts_passes_sdk_tuning_knobs_through_kwargs():
     assert call["use_row_insert"] is True
 
 
-def test_default_hands_use_row_insert_true_to_the_sdk_for_any_size():
-    # Same as calling Index.insert(use_row_insert=True): the SDK decides per
-    # chunk whether a batch is small enough for single insert. We pass the
-    # flag and nothing else, so the behaviour is the SDK's own.
+def test_default_is_single_insert_for_one_document_and_batch_for_more():
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
-    store.add_texts(["t1", "t2", "t3"])
+    store.add_texts(["t1"])
+    store.add_texts(["t1", "t2"])
     store.add_texts(["t1", "t2", "t3", "t4", "t5"])
-    assert [c["use_row_insert"] for c in client.index.inserted] == [True, True]
+    assert [c["use_row_insert"] for c in client.index.inserted] == [True, False, False]
 
 
-def test_write_settings_can_turn_row_insert_off_and_a_call_can_override():
-    cfg = _cfg()
-    cfg.write = WriteSettings(use_row_insert=False)
+def test_write_settings_sets_the_store_default_and_a_call_overrides_it():
     client = FakeClient()
-    store = Envector(config=cfg, embeddings=FakeEmbeddings(dim=4), client=client)
-
-    store.add_texts(["t1"])  # store default: bulk
+    off = _cfg()
+    off.write = WriteSettings(use_row_insert=False)
+    store = Envector(config=off, embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["t1"])  # store says batch insert, even for one document
     assert client.index.inserted[0]["use_row_insert"] is False
-
-    store.add_texts(["t1"], use_row_insert=True)  # explicit per-call wins
+    store.add_texts(["t1"], use_row_insert=True)  # the call wins
     assert client.index.inserted[1]["use_row_insert"] is True
 
-    store2 = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
-    store2.add_texts(["t1"], use_row_insert=False)  # and the other way round
-    assert client.index.inserted[2]["use_row_insert"] is False
+    on = _cfg()
+    on.write = WriteSettings(use_row_insert=True)
+    store = Envector(config=on, embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["t1", "t2", "t3"])  # store says single insert, even for three
+    assert client.index.inserted[2]["use_row_insert"] is True
+    store.add_texts(["t1", "t2", "t3"], use_row_insert=False)
+    assert client.index.inserted[3]["use_row_insert"] is False
+
+
+def test_add_documents_forwards_use_row_insert():
+    from langchain_core.documents import Document
+
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_documents([Document(page_content="a")])
+    store.add_documents([Document(page_content="a"), Document(page_content="b")])
+    store.add_documents([Document(page_content="a")], use_row_insert=False)
+    assert [c["use_row_insert"] for c in client.index.inserted] == [True, False, False]
 
 
 def test_row_insert_reaches_the_reinsert_arm_of_add_or_update():

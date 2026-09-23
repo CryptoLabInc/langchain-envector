@@ -47,7 +47,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - A row deleted moments ago can still take a top-k slot briefly, so a search right after `delete` may return fewer than `k`; pass `fetch_k` to over-fetch.
 - Filtering happens client-side after the server returns `k` hits, so filtered results can be fewer than `k`; set `fetch_k` (or `IndexSettings.fetch_k`) to over-fetch.
 - One enVector endpoint per process; all stores in a process must point at the same server.
-- Calls with fewer documents than the index dimension use EnVector's single insert; larger calls use batch insert. Set `WriteSettings(use_row_insert=False)` to always use batch insert.
+- `add_texts` / `add_documents` take `use_row_insert`: `True` uses EnVector's single insert, `False` batch insert. By default a call with one document uses single insert and a call with two or more uses batch insert.
 - Updates wait for that store's pending inserts to merge first; when interleaving inserts and updates, set `WriteSettings.await_insert=True` and use one store instance per index.
 - `update_documents` / `upsert_documents` above 10,000 items are sent in several batches; if a later batch fails, the earlier ones stay applied.
 
@@ -107,10 +107,8 @@ store.add_texts(
 )
 ```
 
-Calls smaller than the index dimension take EnVector's row-insert path, which sends each document
-separately; larger calls send one block sized by the dimension. The row path moves less over the
-network and takes longer per document. To always use bulk, set `WriteSettings(use_row_insert=False)`
-or pass `use_row_insert=False` to a call.
+`use_row_insert=True` inserts with EnVector's single insert and `False` with batch insert. By default
+a call with one document uses single insert and a call with two or more uses batch insert.
 
 ### Similarity search
 
