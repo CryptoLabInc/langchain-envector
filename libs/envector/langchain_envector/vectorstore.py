@@ -169,6 +169,16 @@ class Envector(VectorStore):
             index.load()
         return index
 
+    def _resolve_row_insert(self, use_row_insert: Optional[bool], n_rows: int) -> bool:
+        """Pick the insert path: an explicit argument wins, then the store
+        setting, then the default rule — one row takes single insert, two or
+        more take batch insert."""
+        if use_row_insert is None:
+            use_row_insert = self.config.write.use_row_insert
+        if use_row_insert is None:
+            return n_rows == 1
+        return bool(use_row_insert)
+
     # -------------------------------
     # VectorStore API
     # -------------------------------
@@ -181,6 +191,7 @@ class Envector(VectorStore):
         vectors: Optional[List[List[float]]] = None,
         partition_name: Optional[str] = None,
         await_completion: Optional[bool] = None,
+        use_row_insert: Optional[bool] = None,
         **kwargs: Any,
     ) -> List[str]:
         """Add texts to the index and return their item IDs.
@@ -192,6 +203,13 @@ class Envector(VectorStore):
         ``config.write.await_insert``). Other keyword arguments go to
         ``Index.insert`` and apply to the rows this call inserts; the upsert
         arm below takes only ``timeout_s`` / ``poll_interval_s``.
+
+        ``use_row_insert`` selects EnVector's insert path: ``True`` uses single
+        insert, ``False`` uses batch insert. By default (``None``) a call with
+        one document uses single insert and a call with two or more documents
+        uses batch insert; ``WriteSettings.use_row_insert`` changes that
+        default for the store. Documents updated in place through ``ids`` are
+        not affected.
 
         ``ids`` follows LangChain's add-or-update contract as far as enVector
         allows: an entry that is an item ID (int or numeric str, such as the
@@ -243,7 +261,7 @@ class Envector(VectorStore):
                     await_completion=await_completion,
                     timeout_s=timeout_s,
                     poll_interval_s=poll_interval_s,
-                    insert_kwargs=kwargs,
+                    insert_kwargs={**kwargs, "use_row_insert": use_row_insert},
                 )
 
         # Prepare metadata JSON strings per item
@@ -263,6 +281,7 @@ class Envector(VectorStore):
             partition_name=partition_name,
             request_ids=request_ids,
             await_completion=awaited,
+            use_row_insert=self._resolve_row_insert(use_row_insert, len(texts)),
             **waits,
             **kwargs,
         )

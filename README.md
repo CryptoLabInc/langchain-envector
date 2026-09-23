@@ -47,6 +47,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - A row deleted moments ago can still take a top-k slot briefly, so a search right after `delete` may return fewer than `k`; pass `fetch_k` to over-fetch.
 - Filtering happens client-side after the server returns `k` hits, so filtered results can be fewer than `k`; set `fetch_k` (or `IndexSettings.fetch_k`) to over-fetch.
 - One enVector endpoint per process; all stores in a process must point at the same server.
+- `add_texts` / `add_documents` take `use_row_insert`: `True` uses EnVector's single insert, `False` batch insert. By default a call with one document uses single insert and a call with two or more uses batch insert.
 - Updates wait for that store's pending inserts to merge first; when interleaving inserts and updates, set `WriteSettings.await_insert=True` and use one store instance per index.
 - `update_documents` / `upsert_documents` above 10,000 items are sent in several batches; if a later batch fails, the earlier ones stay applied.
 
@@ -105,6 +106,9 @@ store.add_texts(
     metadatas=[{"source": "paper.pdf", "page": 1, "chunk": 2}]
 )
 ```
+
+`use_row_insert=True` inserts with EnVector's single insert and `False` with batch insert. By default
+a call with one document uses single insert and a call with two or more uses batch insert.
 
 ### Similarity search
 

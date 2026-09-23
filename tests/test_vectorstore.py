@@ -9,6 +9,7 @@ from langchain_envector.config import (
     EnvectorConfig,
     IndexSettings,
     KeyConfig,
+    WriteSettings,
 )
 from langchain_envector.vectorstore import Envector, Document as LC_Document
 
@@ -575,8 +576,9 @@ def test_add_texts_does_not_wait_but_can_be_asked_to():
 
 
 def test_add_texts_passes_sdk_tuning_knobs_through_kwargs():
-    # execute_until / n_workers / use_row_insert are the SDK's own knobs; they
-    # are not mirrored in WriteSettings, they just travel through **kwargs.
+    # execute_until / n_workers are the SDK's own knobs; they are not mirrored
+    # in WriteSettings, they just travel through **kwargs. use_row_insert is a
+    # named parameter instead, because we decide it against dim.
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
 
@@ -585,6 +587,67 @@ def test_add_texts_passes_sdk_tuning_knobs_through_kwargs():
     assert call["execute_until"] == "flush"
     assert call["n_workers"] == 4
     assert call["use_row_insert"] is True
+
+
+def test_default_is_single_insert_for_one_document_and_batch_for_more():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    store.add_texts(["t1"])
+    store.add_texts(["t1", "t2"])
+    store.add_texts(["t1", "t2", "t3", "t4", "t5"])
+    assert [c["use_row_insert"] for c in client.index.inserted] == [True, False, False]
+
+
+def test_write_settings_sets_the_store_default_and_a_call_overrides_it():
+    client = FakeClient()
+    off = _cfg()
+    off.write = WriteSettings(use_row_insert=False)
+    store = Envector(config=off, embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["t1"])  # store says batch insert, even for one document
+    assert client.index.inserted[0]["use_row_insert"] is False
+    store.add_texts(["t1"], use_row_insert=True)  # the call wins
+    assert client.index.inserted[1]["use_row_insert"] is True
+
+    on = _cfg()
+    on.write = WriteSettings(use_row_insert=True)
+    store = Envector(config=on, embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["t1", "t2", "t3"])  # store says single insert, even for three
+    assert client.index.inserted[2]["use_row_insert"] is True
+    store.add_texts(["t1", "t2", "t3"], use_row_insert=False)
+    assert client.index.inserted[3]["use_row_insert"] is False
+
+
+def test_add_documents_forwards_use_row_insert():
+    from langchain_core.documents import Document
+
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_documents([Document(page_content="a")])
+    store.add_documents([Document(page_content="a"), Document(page_content="b")])
+    store.add_documents([Document(page_content="a")], use_row_insert=False)
+    assert [c["use_row_insert"] for c in client.index.inserted] == [True, False, False]
+
+
+def test_row_insert_reaches_the_reinsert_arm_of_add_or_update():
+    # ids= routes through upsert_documents; a row whose id matched nothing is
+    # re-inserted by add_texts, and that re-insert must keep the chosen path.
+    class _NotFoundIndex(FakeIndex):
+        def upsert(self, items, **kw):
+            result = super().upsert(items, **kw)
+            result["not_found_item_ids"] = [
+                it.item_id for it in items if it.item_id == 99
+            ]
+            return result
+
+    index = _NotFoundIndex()
+    store = Envector(
+        config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=FakeClient(index)
+    )
+    with pytest.warns(UserWarning, match="match no live row"):
+        store.add_texts(["ghost"], ids=[99], use_row_insert=True)
+
+    assert index.inserted[-1]["use_row_insert"] is True
 
 
 def test_partition_management_helpers():

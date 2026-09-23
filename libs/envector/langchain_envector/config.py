@@ -52,14 +52,19 @@ class WriteSettings:
     rebuilt, so those wait by default. Set a flag to ``False`` for
     fire-and-forget bulk work and wait once at the end.
 
-    Only the waiting is configured here; the SDK's per-call knobs
-    (``execute_until``, ``n_workers``, ``use_row_insert``, ...) reach
-    ``Index.insert`` through ``add_texts(**kwargs)``.
+    ``use_row_insert`` selects EnVector's insert path for ``add_texts``:
+    ``True`` single insert, ``False`` batch insert. ``None`` (default) uses
+    single insert for a call with one document and batch insert for two or
+    more. ``add_texts`` can override it per call.
+
+    The SDK's other per-call knobs (``execute_until``, ``n_workers``, ...)
+    reach ``Index.insert`` through ``add_texts(**kwargs)``.
     """
 
     await_insert: bool = False
     await_delete: bool = True
     await_update: bool = True
+    use_row_insert: Optional[bool] = None
 
     # Polling budget for the delete/update/upsert waits. Inserts keep the
     # SDK's own budget (a day) unless `timeout_s` is passed to add_texts.
