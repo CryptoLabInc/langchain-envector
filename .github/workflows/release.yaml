@@ -38,7 +38,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [
-          { name: "linux", runs-on: [self-hosted, linux, no-gpu]}
+          { name: "linux", runs-on: ubuntu-latest}
         ]
     steps:
     - name: Pre-clean (self-hosted)
@@ -102,7 +102,7 @@ jobs:
   # ============================================
   release-to-testpypi :
     needs: [build-wheel-per-os]
-    runs-on: [self-hosted, linux, no-gpu]
+    runs-on: ubuntu-latest
     env:
       TWINE_USERNAME: "__token__"
       TWINE_PASSWORD: ${{ secrets.TEST_PYPI_PASSWORD }}
@@ -149,7 +149,7 @@ jobs:
   ## ============================================
   pytest-with-testpypi-wheels:
     needs: release-to-testpypi
-    runs-on: [self-hosted, linux, no-gpu]
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
     env:
@@ -226,7 +226,7 @@ jobs:
   release-to-pypi:
     if: ${{ github.event_name == 'push' || github.event.inputs.deploy_env == 'pypi' }}
     needs: pytest-with-testpypi-wheels
-    runs-on: [self-hosted, linux, no-gpu]
+    runs-on: ubuntu-latest
     env:
       TWINE_USERNAME: "__token__"
       TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
