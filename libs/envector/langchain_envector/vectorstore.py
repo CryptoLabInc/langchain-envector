@@ -442,16 +442,13 @@ class Envector(VectorStore):
         )
         if not item_ids:
             return []
-        index = self.client.index
-        docs: List[Document] = []
-        for chunk in _chunked(item_ids, MAX_MUTATION_ITEMS_PER_CALL):
-            for item in index.get_by_ids(
-                chunk,
-                output_fields=self.config.index.output_fields,
-                partition_name=partition_name,
-            ):
-                docs.append(_stored_document(item)[0])
-        return docs
+        # The SDK splits the request at the server's per-call cap.
+        items = self.client.index.get_by_ids(
+            item_ids,
+            output_fields=self.config.index.output_fields,
+            partition_name=partition_name,
+        )
+        return [_stored_document(item)[0] for item in items]
 
     # -------------------------------
     # In-place mutation (pyenvector >= 1.6.0)

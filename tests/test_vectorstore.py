@@ -1351,20 +1351,6 @@ def test_get_by_ids_accepts_already_decrypted_payloads():
     ]
 
 
-def test_get_by_ids_splits_above_the_per_call_cap(monkeypatch):
-    from langchain_envector import vectorstore as vs
-
-    monkeypatch.setattr(vs, "MAX_MUTATION_ITEMS_PER_CALL", 2)
-    client = FakeClient()
-    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
-    ids = store.add_texts(["a", "b", "c", "d", "e"])
-
-    docs = store.get_by_ids(ids)
-
-    assert [d.id for d in docs] == ids
-    assert [f["item_ids"] for f in client.index.fetched] == [[1, 2], [3, 4], [5]]
-
-
 def test_get_by_ids_does_not_load_the_index():
     client = FakeClient()
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
