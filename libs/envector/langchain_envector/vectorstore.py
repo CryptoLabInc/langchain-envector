@@ -430,8 +430,12 @@ class Envector(VectorStore):
         issued, deleted, or not enVector item IDs at all — are left out rather
         than raised, as LangChain's contract asks.
 
-        A document is readable as soon as `add_texts` returns and stops being
-        readable as soon as `delete` returns; neither waits for a merge.
+        Liveness here is the row's own state, not search visibility. A document
+        is readable as soon as `add_texts` returns, before any merge, so it can
+        come back from ``get_by_ids`` while ``similarity_search`` does not find
+        it yet; right after `update_documents` this returns the new content
+        while search may still score the old vector. A deleted document stops
+        being readable as soon as `delete` returns. These differences are expected.
 
         Item IDs are unique within a partition only: pass the ``partition_name``
         a document was added under. Without it the default partition is read,
