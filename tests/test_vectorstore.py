@@ -1565,3 +1565,26 @@ def test_get_by_ids_ignores_non_ascii_digits():
     store.add_texts(["a", "b", "c"])
     assert store.get_by_ids(["٣"]) == []
     assert client.index.fetched == []
+
+
+def test_numpy_integers_are_item_ids_and_numpy_bool_float_are_not():
+    # IDs often come out of NumPy arrays or pandas columns. A NumPy integer is
+    # an integer; np.bool_ and np.float64 are not item IDs any more than their
+    # Python counterparts.
+    np = pytest.importorskip("numpy")
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["a", "b", "c", "d"])
+
+    for good in (np.int64(3), np.int32(3), np.uint64(3)):
+        assert [d.page_content for d in store.get_by_ids([good])] == ["c"]
+    store.delete([np.int64(2)])
+    assert client.index.deleted[-1]["item_ids"] == [2]
+    assert type(client.index.deleted[-1]["item_ids"][0]) is int
+
+    for bad in (np.bool_(True), np.float64(3.9), np.float64(3.0)):
+        assert store.get_by_ids([bad]) == []
+        with pytest.raises(ValueError, match="expects integer item IDs"):
+            store.delete([bad])
+    with pytest.raises(ValueError, match="positive integers"):
+        store.delete([np.int64(0)])
