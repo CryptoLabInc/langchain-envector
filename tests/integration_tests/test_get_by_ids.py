@@ -24,9 +24,14 @@ from langchain_envector.config import (
     KeyConfig,
     WriteSettings,
 )
-from langchain_envector.vectorstore import Document, Envector
+from langchain_envector.vectorstore import SDK_HAS_GET_BY_IDS, Document, Envector
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not SDK_HAS_GET_BY_IDS, reason="installed pyenvector has no Index.get_by_ids"
+    ),
+]
 
 DIM = 32
 

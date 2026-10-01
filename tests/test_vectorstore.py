@@ -1372,3 +1372,17 @@ def test_stored_null_text_reads_as_empty_document():
     expected = [LC_Document(page_content="", metadata={"k": 1}, id="1")]
     assert store.get_by_ids(["1"]) == expected
     assert store.similarity_search("q", k=1) == expected
+
+
+def test_get_by_ids_needs_an_sdk_that_has_it():
+    # A pyenvector release without Index.get_by_ids gets a clear
+    # NotImplementedError, LangChain's usual answer, not an AttributeError.
+    client = FakeClient()
+
+    class _OldIndex(FakeIndex):
+        get_by_ids = property(lambda self: (_ for _ in ()).throw(AttributeError))
+
+    client._index = _OldIndex()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    with pytest.raises(NotImplementedError, match="upgrade pyenvector"):
+        store.get_by_ids(["1"])

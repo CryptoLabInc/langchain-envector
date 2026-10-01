@@ -17,7 +17,7 @@ from langchain_envector.config import (
     IndexSettings,
     KeyConfig,
 )
-from langchain_envector.vectorstore import Envector
+from langchain_envector.vectorstore import SDK_HAS_GET_BY_IDS, Envector
 
 pytestmark = pytest.mark.integration
 
@@ -64,7 +64,8 @@ class TestEnvectorVectorStore(VectorStoreIntegrationTests):
 
     @property
     def has_get_by_ids(self) -> bool:
-        return True
+        # Follows the installed SDK: skipped where pyenvector lacks Index.get_by_ids.
+        return SDK_HAS_GET_BY_IDS
 
     @pytest.fixture()
     def vectorstore(self) -> Generator[VectorStore, None, None]:  # type: ignore[override]

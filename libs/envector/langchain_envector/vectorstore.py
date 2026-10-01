@@ -7,10 +7,14 @@ from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
 from pyenvector import UpdateItem, UpsertItem
 from pyenvector.index.index import MAX_MUTATION_ITEMS_PER_CALL
+from pyenvector.index.index import Index as _SdkIndex
 
 from .config import EnvectorConfig
 from .client import EnvectorClient
 from .types import Embeddings, as_embeddings, pack_metadata, unpack_metadata
+
+# Index.get_by_ids is newer than the oldest pyenvector this package accepts.
+SDK_HAS_GET_BY_IDS = hasattr(_SdkIndex, "get_by_ids")
 
 
 def _mutation_items(
@@ -441,13 +445,19 @@ class Envector(VectorStore):
         a document was added under. Without it the default partition is read,
         where the same ID may be a different document.
         """
+        index = self.client.index
+        if not hasattr(index, "get_by_ids"):
+            raise NotImplementedError(
+                "Envector.get_by_ids needs a pyenvector release that provides "
+                "Index.get_by_ids; upgrade pyenvector."
+            )
         item_ids = list(
             dict.fromkeys(i for i in _split_caller_ids(list(ids))[0] if i is not None)
         )
         if not item_ids:
             return []
         # The SDK splits the request at the server's per-call cap.
-        items = self.client.index.get_by_ids(
+        items = index.get_by_ids(
             item_ids,
             output_fields=self.config.index.output_fields,
             partition_name=partition_name,

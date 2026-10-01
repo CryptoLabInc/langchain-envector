@@ -44,6 +44,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - Item IDs are issued by the server (positive integers, returned as strings). Pass them back to `delete`, `update_documents`, `upsert_documents`, or as `ids` to `add_documents` to update in place — any numeric id is taken to be one of them. Other IDs cannot be created; such rows get server-issued IDs and a `UserWarning`.
 - LangChain's `indexing` API is unsupported, since it depends on its own IDs.
 - Item IDs are unique within a partition only; pass `partition_name` to `get_by_ids` for documents added to a named partition.
+- `get_by_ids` needs a pyenvector release that provides `Index.get_by_ids`; with an earlier pyenvector it raises `NotImplementedError`.
 - Embeddings must be unit norm: scores are inner products computed under encryption, and vectors with components outside [-1, 1] rank incorrectly.
 - A row deleted moments ago can still take a top-k slot briefly, so a search right after `delete` may return fewer than `k`; pass `fetch_k` to over-fetch.
 - Filtering happens client-side after the server returns `k` hits, so filtered results can be fewer than `k`; set `fetch_k` (or `IndexSettings.fetch_k`) to over-fetch.
