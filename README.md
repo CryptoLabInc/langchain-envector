@@ -41,7 +41,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - Client-side filtering requires the JSON envelope to include an object under `metadata`.
 
 ## Limitations
-- Item IDs are issued by the server (positive integers, returned as strings). Pass them back to `delete`, `update_documents`, `upsert_documents`, or as `ids` to `add_documents` to update in place — any numeric id is taken to be one of them. Other IDs cannot be created; such rows get server-issued IDs and a `UserWarning`.
+- Item IDs are issued by the server (positive integers, returned as strings). Pass them back — as those strings or as ints — to `get_by_ids`, `delete`, `update_documents`, `upsert_documents`, or as `ids` to `add_documents` to update in place. Other IDs, such as UUIDs, cannot be created; such rows get server-issued IDs and a `UserWarning`, and `get_by_ids` never finds them.
 - LangChain's `indexing` API is unsupported, since it depends on its own IDs.
 - Item IDs are unique within a partition only; pass `partition_name` to `get_by_ids` for documents added to a named partition.
 - `get_by_ids` needs a pyenvector release that provides `Index.get_by_ids`; with an earlier pyenvector it raises `NotImplementedError`.
