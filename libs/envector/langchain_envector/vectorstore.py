@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numbers
 import warnings
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -25,17 +26,18 @@ _MAX_ITEM_ID = 2**63 - 1
 def _readable_item_id(value: Any) -> Optional[int]:
     """The item ID ``value`` names exactly, or ``None`` when it names none.
 
-    The one ID check every method shares: only a positive ``int`` within int64
-    (the server issues item IDs as ``int64``) or an ASCII decimal string of one
-    counts. ``bool`` and ``float`` are not item IDs — ``int(True)`` is 1 and
-    ``int(3.9)`` is 3, so coercing them would address a different document —
-    and neither are non-ASCII digits such as ``"٣"`` or ``"３"``, which
-    ``str.isdecimal`` accepts.
+    The one ID check every method shares: only a positive integer within int64
+    — any ``numbers.Integral``, so NumPy integers count; the server issues item
+    IDs as ``int64`` — or an ASCII decimal string of one counts. ``bool`` and
+    ``float`` are not item IDs — ``int(True)`` is 1 and ``int(3.9)`` is 3, so
+    coercing them would address a different document — and neither are
+    non-ASCII digits such as ``"٣"`` or ``"３"``, which ``str.isdecimal``
+    accepts.
     """
     if isinstance(value, bool):
         return None
-    if isinstance(value, int):
-        return value if 0 < value <= _MAX_ITEM_ID else None
+    if isinstance(value, numbers.Integral):
+        return int(value) if 0 < value <= _MAX_ITEM_ID else None
     if isinstance(value, str):
         text = value.strip()
         if text.isascii() and text.isdigit():
@@ -48,7 +50,7 @@ def _is_non_positive_integer(value: Any) -> bool:
     """True for an integer (or its ASCII decimal string, sign allowed) <= 0."""
     if isinstance(value, bool):
         return False
-    if isinstance(value, int):
+    if isinstance(value, numbers.Integral):
         return value <= 0
     if isinstance(value, str):
         text = value.strip()
@@ -290,8 +292,9 @@ class Envector(VectorStore):
         not affected.
 
         ``ids`` follows LangChain's add-or-update contract as far as enVector
-        allows: an entry that is an item ID (a positive int or its decimal str, such as the
-        ``Document.id`` search results carry) updates that item in place; an ID
+        allows: an entry that is an item ID (a positive int or its decimal str,
+        such as the ``Document.id`` search results carry) updates that item in
+        place; an ID
         with no live row, or a non-integer ID, cannot be created, so that row is
         inserted with a server-issued ID and a ``UserWarning``. ``None`` entries
         insert. The returned list holds the IDs actually in the index, as
