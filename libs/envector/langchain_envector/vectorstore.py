@@ -447,20 +447,21 @@ class Envector(VectorStore):
     ) -> List[Document]:
         """Read documents by item ID, without a search.
 
-        Takes the IDs `add_texts` / `add_documents` return (or a search
-        result's ``Document.id``), as ``str`` or ``int``; any other value,
-        ``bool`` and ``float`` included, names no item and is left out. Every live item comes
-        back as a ``Document`` whose ``id`` is its item ID, in the order of
-        ``ids``; repeated IDs are read once. IDs that match no live row — never
-        issued, deleted, or not enVector item IDs at all — are left out rather
-        than raised, as LangChain's contract asks.
+        Takes the IDs `add_texts` / `add_documents` return, or a search
+        result's ``Document.id``. Every live item comes back as a ``Document``
+        whose ``id`` is its item ID, in the order of ``ids``; repeated IDs are
+        read once. IDs that match no live row — never issued, deleted, or not
+        enVector item IDs at all — are left out rather than raised, as
+        LangChain's contract asks.
 
         Liveness here is the row's own state, not search visibility. A document
         is readable as soon as `add_texts` returns, before any merge, so it can
         come back from ``get_by_ids`` while ``similarity_search`` does not find
-        it yet; right after `update_documents` this returns the new content
-        while search may still score the old vector. A deleted document stops
-        being readable as soon as `delete` returns. These differences are expected.
+        it yet. A deleted document stops being readable as soon as `delete`
+        returns. After an `update_documents` that replaces the vector and is
+        not awaited (``await_completion=False``), this returns the new content
+        while search may leave the document out until the new vector is
+        searchable. These differences are expected.
 
         Item IDs are unique within a partition only: pass the ``partition_name``
         a document was added under. Without it the default partition is read,
