@@ -17,59 +17,6 @@ from .types import Embeddings, as_embeddings, pack_metadata, unpack_metadata
 SDK_HAS_GET_BY_IDS = hasattr(_SdkIndex, "get_by_ids")
 
 
-def _mutation_items(
-    item_ids: List[Any], label: str, *, dedupe: bool = False
-) -> List[int]:
-    """Coerce caller-supplied IDs to the ``int`` item_ids the SDK addresses.
-
-    The SDK rejects non-positive and repeated ids with its own message; both
-    are caught here and named after the calling method. ``dedupe=True``
-    (delete) drops repeats instead, since deleting a row twice is deleting it.
-    """
-    try:
-        ints = [int(x) for x in item_ids]
-    except (TypeError, ValueError) as e:
-        raise ValueError(
-            f"Envector.{label} expects integer item IDs (or numeric strings) "
-            "as returned by add_texts/add_documents."
-        ) from e
-    if any(i <= 0 for i in ints):
-        raise ValueError(
-            f"Envector.{label}: item IDs are positive integers (got {min(ints)})."
-        )
-    if dedupe:
-        return list(dict.fromkeys(ints))
-    if len(set(ints)) != len(ints):
-        raise ValueError(f"Envector.{label}: item IDs must be unique within one call.")
-    return ints
-
-
-def _split_caller_ids(ids: List[Any]) -> Tuple[List[Optional[int]], List[Any]]:
-    """Sort caller-supplied IDs into enVector item IDs and everything else.
-
-    Returns ``(item_ids, foreign)``: ``item_ids`` is positional against ``ids``
-    with ``None`` wherever the entry was ``None`` or not an integer, and
-    ``foreign`` lists the non-integer values so the caller can be told they
-    were not honoured.
-    """
-    item_ids: List[Optional[int]] = []
-    foreign: List[Any] = []
-    for x in ids:
-        if x is None:
-            item_ids.append(None)
-            continue
-        try:
-            value = int(x)
-        except (TypeError, ValueError):
-            value = 0
-        if value <= 0:  # the server issues positive ints only
-            item_ids.append(None)
-            foreign.append(x)
-        else:
-            item_ids.append(value)
-    return item_ids, foreign
-
-
 # Item IDs travel as proto int64; a larger value cannot name a row and the
 # SDK would fail to encode it.
 _MAX_ITEM_ID = 2**63 - 1
@@ -78,13 +25,12 @@ _MAX_ITEM_ID = 2**63 - 1
 def _readable_item_id(value: Any) -> Optional[int]:
     """The item ID ``value`` names exactly, or ``None`` when it names none.
 
-    For `get_by_ids`, which must never read an item the caller did not name:
-    only a positive ``int`` within int64 (the server issues item IDs as
-    ``int64``), or an ASCII decimal string of one, counts. ``bool`` and
-    ``float`` are not item IDs — ``int(True)`` is 1 and ``int(3.9)`` is 3, so
-    coercing them would return a different document — and neither are
-    non-ASCII digits such as ``"٣"`` or ``"３"``, which ``str.isdecimal``
-    accepts.
+    The one ID check every method shares: only a positive ``int`` within int64
+    (the server issues item IDs as ``int64``) or an ASCII decimal string of one
+    counts. ``bool`` and ``float`` are not item IDs — ``int(True)`` is 1 and
+    ``int(3.9)`` is 3, so coercing them would address a different document —
+    and neither are non-ASCII digits such as ``"٣"`` or ``"３"``, which
+    ``str.isdecimal`` accepts.
     """
     if isinstance(value, bool):
         return None
@@ -96,6 +42,71 @@ def _readable_item_id(value: Any) -> Optional[int]:
             item_id = int(text)
             return item_id if 0 < item_id <= _MAX_ITEM_ID else None
     return None
+
+
+def _is_non_positive_integer(value: Any) -> bool:
+    """True for an integer (or its ASCII decimal string, sign allowed) <= 0."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value <= 0
+    if isinstance(value, str):
+        text = value.strip()
+        digits = text[1:] if text[:1] in "+-" else text
+        return bool(digits) and digits.isascii() and digits.isdigit() and int(text) <= 0
+    return False
+
+
+def _mutation_items(
+    item_ids: List[Any], label: str, *, dedupe: bool = False
+) -> List[int]:
+    """Turn caller-supplied IDs into the ``int`` item_ids the SDK addresses.
+
+    Used by the methods that change rows (delete, update, upsert), so a value
+    that names no item raises instead of being coerced onto another item — see
+    `_readable_item_id`. Non-positive and repeated ids are named after the
+    calling method. ``dedupe=True`` (delete) drops repeats instead, since
+    deleting a row twice is deleting it.
+    """
+    ints: List[int] = []
+    for x in item_ids:
+        item_id = _readable_item_id(x)
+        if item_id is None:
+            if _is_non_positive_integer(x):
+                raise ValueError(
+                    f"Envector.{label}: item IDs are positive integers (got {x!r})."
+                )
+            raise ValueError(
+                f"Envector.{label} expects integer item IDs (a positive int or its "
+                f"decimal string) as returned by add_texts/add_documents; got {x!r}."
+            )
+        ints.append(item_id)
+    if dedupe:
+        return list(dict.fromkeys(ints))
+    if len(set(ints)) != len(ints):
+        raise ValueError(f"Envector.{label}: item IDs must be unique within one call.")
+    return ints
+
+
+def _split_caller_ids(ids: List[Any]) -> Tuple[List[Optional[int]], List[Any]]:
+    """Sort caller-supplied IDs into enVector item IDs and everything else.
+
+    Returns ``(item_ids, foreign)``: ``item_ids`` is positional against ``ids``
+    with ``None`` wherever the entry was ``None`` or names no item (see
+    `_readable_item_id`), and ``foreign`` lists those other values so the
+    caller can be told they were not honoured.
+    """
+    item_ids: List[Optional[int]] = []
+    foreign: List[Any] = []
+    for x in ids:
+        if x is None:
+            item_ids.append(None)
+            continue
+        value = _readable_item_id(x)
+        item_ids.append(value)
+        if value is None:
+            foreign.append(x)
+    return item_ids, foreign
 
 
 def _one_embedding_arg(embedding: Any, embeddings: Any) -> Any:
@@ -279,7 +290,7 @@ class Envector(VectorStore):
         not affected.
 
         ``ids`` follows LangChain's add-or-update contract as far as enVector
-        allows: an entry that is an item ID (int or numeric str, such as the
+        allows: an entry that is an item ID (a positive int or its decimal str, such as the
         ``Document.id`` search results carry) updates that item in place; an ID
         with no live row, or a non-integer ID, cannot be created, so that row is
         inserted with a server-issued ID and a ``UserWarning``. ``None`` entries
@@ -431,8 +442,9 @@ class Envector(VectorStore):
         """Delete items from the encrypted index by item ID.
 
         Accepts the ``item_id`` values returned from ``add_texts`` /
-        ``add_documents``. Both ``int`` and ``str`` (numeric) IDs are accepted
-        and coerced to ``int`` before being passed to the SDK.
+        ``add_documents``, as ``str`` or ``int``. Any other value — ``bool`` and
+        ``float`` included — raises ``ValueError`` rather than being coerced onto
+        another item (``3.9`` would otherwise delete item 3).
 
         Deletion is asynchronous server-side; by default this waits until the
         affected shards are rebuilt and the remaining data is searchable again

@@ -1490,3 +1490,78 @@ def test_search_skips_a_hit_with_empty_text_and_metadata():
     ]
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
     assert [d.id for d in store.similarity_search("q", k=2)] == ["2"]
+
+
+# Values that look like item IDs to int(...) but name none: True -> 1,
+# 3.9 / 3.0 -> 3, "٣" (Arabic-Indic three) -> 3. None may address an item.
+_COERCIBLE_NON_IDS = [True, 3.9, 3.0, "٣"]
+
+
+@pytest.mark.parametrize("not_an_id", _COERCIBLE_NON_IDS)
+def test_delete_refuses_values_that_name_no_item(not_an_id):
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["a", "b", "c"])
+
+    with pytest.raises(ValueError, match="expects integer item IDs"):
+        store.delete([not_an_id])
+    assert client.index.deleted == []
+
+
+@pytest.mark.parametrize("not_an_id", _COERCIBLE_NON_IDS)
+def test_update_and_upsert_refuse_values_that_name_no_item(not_an_id):
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["a", "b", "c"])
+    doc = LC_Document(page_content="new")
+
+    with pytest.raises(ValueError, match="expects integer item IDs"):
+        store.update_metadata([not_an_id], ["new"])
+    with pytest.raises(ValueError, match="expects integer item IDs"):
+        store.update_documents([not_an_id], [doc])
+    with pytest.raises(ValueError, match="expects integer item IDs"):
+        store.upsert_documents([doc], ids=[not_an_id])
+    assert client.index.updates == []
+    assert client.index.upserts == []
+
+
+@pytest.mark.parametrize("not_an_id", _COERCIBLE_NON_IDS)
+def test_add_texts_inserts_instead_of_overwriting_on_a_non_id(not_an_id):
+    # add_texts keeps its existing rule for ids it cannot honour: insert as a
+    # new row and warn. It must not update item 3 in place.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["a", "b", "c"])
+
+    with pytest.warns(UserWarning, match="not enVector item IDs"):
+        new_ids = store.add_texts(["x"], ids=[not_an_id])
+    assert new_ids == ["4"]
+    assert client.index.upserts == []
+    assert client.index.stored[(None, 3)] == '{"text": "c", "metadata": {}}'
+
+
+def test_mutations_still_take_ints_and_decimal_strings():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["a", "b", "c", "d"])
+
+    store.delete(["1", " 2 ", 3])
+    assert client.index.deleted[-1]["item_ids"] == [1, 2, 3]
+    store.update_metadata([4], ["d2"])
+    assert [it.item_id for it in client.index.updates[-1]["items"]] == [4]
+
+
+def test_non_positive_ids_keep_their_own_message():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    for bad in (0, -3, "-3", "0"):
+        with pytest.raises(ValueError, match="positive integers"):
+            store.delete([bad])
+
+
+def test_get_by_ids_ignores_non_ascii_digits():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["a", "b", "c"])
+    assert store.get_by_ids(["٣"]) == []
+    assert client.index.fetched == []
