@@ -1386,3 +1386,27 @@ def test_get_by_ids_needs_an_sdk_that_has_it():
     store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
     with pytest.raises(NotImplementedError, match="upgrade pyenvector"):
         store.get_by_ids(["1"])
+
+
+@pytest.mark.parametrize(
+    "not_an_id", [True, False, 3.9, 3.0, "3.0", "-3", "0", " ", None, b"3", [3]]
+)
+def test_get_by_ids_never_reads_an_item_the_caller_did_not_name(not_an_id):
+    # int(True) is 1 and int(3.9) is 3: coercing would return another document.
+    # Such values name no item, so they are left out, as LangChain asks.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["a", "b", "c"])
+
+    assert store.get_by_ids([not_an_id]) == []
+    assert client.index.fetched == []
+
+
+def test_get_by_ids_accepts_ints_and_decimal_strings():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["a", "b", "c"])
+
+    docs = store.get_by_ids([3, " 2 ", "1", 3.9, True])
+    assert [d.page_content for d in docs] == ["c", "b", "a"]
+    assert client.index.fetched[-1]["item_ids"] == [3, 2, 1]

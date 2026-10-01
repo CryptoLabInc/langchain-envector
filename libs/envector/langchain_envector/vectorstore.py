@@ -70,6 +70,26 @@ def _split_caller_ids(ids: List[Any]) -> Tuple[List[Optional[int]], List[Any]]:
     return item_ids, foreign
 
 
+def _readable_item_id(value: Any) -> Optional[int]:
+    """The item ID ``value`` names exactly, or ``None`` when it names none.
+
+    For `get_by_ids`, which must never read an item the caller did not name:
+    only a positive ``int`` or a decimal string of one counts. ``bool`` and
+    ``float`` are not item IDs — ``int(True)`` is 1 and ``int(3.9)`` is 3, so
+    coercing them would return a different document.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isdecimal():
+            item_id = int(text)
+            return item_id if item_id > 0 else None
+    return None
+
+
 def _one_embedding_arg(embedding: Any, embeddings: Any) -> Any:
     """Resolve the standard positional ``embedding`` and our older
     ``embeddings=`` keyword into one value, rejecting conflicting pairs."""
@@ -428,7 +448,8 @@ class Envector(VectorStore):
         """Read documents by item ID, without a search.
 
         Takes the IDs `add_texts` / `add_documents` return (or a search
-        result's ``Document.id``), as ``str`` or ``int``. Every live item comes
+        result's ``Document.id``), as ``str`` or ``int``; any other value,
+        ``bool`` and ``float`` included, names no item and is left out. Every live item comes
         back as a ``Document`` whose ``id`` is its item ID, in the order of
         ``ids``; repeated IDs are read once. IDs that match no live row — never
         issued, deleted, or not enVector item IDs at all — are left out rather
@@ -452,7 +473,9 @@ class Envector(VectorStore):
                 "Index.get_by_ids; upgrade pyenvector."
             )
         item_ids = list(
-            dict.fromkeys(i for i in _split_caller_ids(list(ids))[0] if i is not None)
+            dict.fromkeys(
+                i for i in (_readable_item_id(x) for x in ids) if i is not None
+            )
         )
         if not item_ids:
             return []
