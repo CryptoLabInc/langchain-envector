@@ -41,7 +41,8 @@ Key dataclasses live in `libs/envector/config.py`:
 - Client-side filtering requires the JSON envelope to include an object under `metadata`.
 
 ## Limitations
-- Item IDs are issued by the server (positive integers, returned as strings). Pass them back — as those strings or as ints — to `get_by_ids`, `delete`, `update_documents`, `upsert_documents`, or as `ids` to `add_documents` to update in place. Other IDs, such as UUIDs, cannot be created; such rows get server-issued IDs and a `UserWarning`, and `get_by_ids` never finds them.
+- Item IDs are issued by the server (positive integers, returned as strings). Pass them back in a list — as those strings or as ints, e.g. `[doc.id]` — to `get_by_ids`, `delete`, `update_documents`, `upsert_documents`, or as `ids` to `add_documents` to update in place. Other IDs, such as UUIDs, cannot be created; such rows get server-issued IDs and a `UserWarning`, and `get_by_ids` never finds them.
+- Only a positive integer, or its plain decimal string, is an item ID. Anything else — a float such as `3.0`, a bool, `"+3"`, `"3_000"`, non-ASCII digits — names no item: `get_by_ids` skips it and `delete` / `update_*` / `upsert_documents` raise `ValueError`. In `add_documents`, a string of your own is inserted as a new row with a `UserWarning`, while a float or bool raises rather than inserting a duplicate. A bare string instead of a list raises `TypeError`.
 - LangChain's `indexing` API is unsupported, since it depends on its own IDs.
 - Item IDs are unique within a partition only; pass `partition_name` to `get_by_ids` for documents added to a named partition.
 - `get_by_ids` needs a pyenvector release that provides `Index.get_by_ids`; with an earlier pyenvector it raises `NotImplementedError`.
@@ -189,7 +190,7 @@ docs = store.get_by_ids(ids, partition_name="tenant_a")  # rows in a named parti
 ### Delete
 
 ```python
-store.delete(ids)  # accepts ints or numeric strings, e.g. doc.id
+store.delete([doc.id])  # a list of item IDs, as ints or the strings add_documents returned
 ```
 
 Deletion is asynchronous server-side; by default `delete` waits for the SDK's

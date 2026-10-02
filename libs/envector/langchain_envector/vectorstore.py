@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numbers
 import warnings
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -17,26 +18,114 @@ from .types import Embeddings, as_embeddings, pack_metadata, unpack_metadata
 SDK_HAS_GET_BY_IDS = hasattr(_SdkIndex, "get_by_ids")
 
 
+# Item IDs travel as proto int64; a larger value cannot name a row and the
+# SDK would fail to encode it. 19 digits is the length of 2**63 - 1, so a
+# longer digit string is refused before int() sees it (CPython refuses to
+# convert more than 4300 digits anyway, with its own error).
+_MAX_ITEM_ID = 2**63 - 1
+_MAX_ITEM_ID_DIGITS = 19
+
+
+def _parse_integer(value: Any) -> Optional[int]:
+    """``value`` as the integer it spells, or ``None`` when it spells none.
+
+    Accepts any ``numbers.Integral`` except ``bool`` (NumPy integers count),
+    and a string of at most 19 ASCII digits with an optional leading ``-``.
+    ``bool``, ``float``, ``"+3"``, ``"3_000"``, non-ASCII digits such as
+    ``"٣"`` or ``"３"``, and anything else spell no integer here: coercing them
+    with ``int()`` would address a document the caller did not name.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        digits = text[1:] if text[:1] == "-" else text
+        if (
+            0 < len(digits) <= _MAX_ITEM_ID_DIGITS
+            and digits.isascii()
+            and digits.isdigit()
+        ):
+            return int(text)
+    return None
+
+
+def _readable_item_id(value: Any) -> Optional[int]:
+    """The item ID ``value`` names exactly, or ``None`` when it names none.
+
+    The one ID check every method shares: an integer per `_parse_integer`
+    that is positive and within int64, since the server issues item IDs as
+    ``int64``.
+    """
+    item_id = _parse_integer(value)
+    if item_id is None or not 0 < item_id <= _MAX_ITEM_ID:
+        return None
+    return item_id
+
+
+def _wrong_type_for_id(value: Any) -> bool:
+    """True when ``value`` cannot be an ID of any kind: a ``bool``, a ``float``
+    or other non-integral number, bytes, or an ``__index__`` object such as a
+    0-d NumPy array.
+
+    LangChain IDs are strings, so a string that is not one of our item IDs
+    (a UUID, a 0-based chunk number) is a foreign ID and `add_texts` inserts
+    it as a new row with a warning. A ``float`` such as ``3.0`` is no ID at
+    all — it is almost always a wrongly-typed item ID, as when a pandas
+    integer column turns float64 on its first NaN — and a silent new row
+    would duplicate the document on every re-load, so `add_texts` raises.
+    """
+    if isinstance(value, (bool, bytes, bytearray)):
+        return True
+    if isinstance(value, numbers.Integral):
+        return False
+    if isinstance(value, numbers.Number) or hasattr(value, "__index__"):
+        return True
+    return False
+
+
+def _ids_list(ids: Any, label: str) -> List[Any]:
+    """``ids`` as a list, refusing a bare string or bytes.
+
+    A ``str`` is itself a sequence of one-character strings, so
+    ``delete("13")`` would otherwise delete items 1 and 3, and ``bytes``
+    iterate as ints — ``delete(b"13")`` would delete items 49 and 51.
+    """
+    if isinstance(ids, (str, bytes, bytearray)):
+        raise TypeError(
+            f"Envector.{label}: ids must be a list of item IDs, e.g. [doc.id]; "
+            f"got a bare {type(ids).__name__}, which would be read one character "
+            "at a time."
+        )
+    return list(ids)
+
+
 def _mutation_items(
     item_ids: List[Any], label: str, *, dedupe: bool = False
 ) -> List[int]:
-    """Coerce caller-supplied IDs to the ``int`` item_ids the SDK addresses.
+    """Turn caller-supplied IDs into the ``int`` item_ids the SDK addresses.
 
-    The SDK rejects non-positive and repeated ids with its own message; both
-    are caught here and named after the calling method. ``dedupe=True``
-    (delete) drops repeats instead, since deleting a row twice is deleting it.
+    Used by the methods that change rows (delete, update, upsert), so a value
+    that names no item raises instead of being coerced onto another item — see
+    `_readable_item_id`. Non-positive and repeated ids are named after the
+    calling method. ``dedupe=True`` (delete) drops repeats instead, since
+    deleting a row twice is deleting it.
     """
-    try:
-        ints = [int(x) for x in item_ids]
-    except (TypeError, ValueError) as e:
-        raise ValueError(
-            f"Envector.{label} expects integer item IDs (or numeric strings) "
-            "as returned by add_texts/add_documents."
-        ) from e
-    if any(i <= 0 for i in ints):
-        raise ValueError(
-            f"Envector.{label}: item IDs are positive integers (got {min(ints)})."
-        )
+    ints: List[int] = []
+    for x in item_ids:
+        parsed = _parse_integer(x)
+        if parsed is None:
+            raise ValueError(
+                f"Envector.{label} expects integer item IDs (a positive int or its "
+                f"decimal string) as returned by add_texts/add_documents; got {x!r}."
+            )
+        if not 0 < parsed <= _MAX_ITEM_ID:
+            raise ValueError(
+                f"Envector.{label}: item IDs are positive integers up to "
+                f"{_MAX_ITEM_ID} (got {x!r})."
+            )
+        ints.append(parsed)
     if dedupe:
         return list(dict.fromkeys(ints))
     if len(set(ints)) != len(ints):
@@ -48,9 +137,11 @@ def _split_caller_ids(ids: List[Any]) -> Tuple[List[Optional[int]], List[Any]]:
     """Sort caller-supplied IDs into enVector item IDs and everything else.
 
     Returns ``(item_ids, foreign)``: ``item_ids`` is positional against ``ids``
-    with ``None`` wherever the entry was ``None`` or not an integer, and
-    ``foreign`` lists the non-integer values so the caller can be told they
-    were not honoured.
+    with ``None`` wherever the entry was ``None`` or names no item (see
+    `_readable_item_id`), and ``foreign`` lists those other values so the
+    caller can be told they were not honoured. A value of a type that can be
+    no ID at all (see `_wrong_type_for_id`) raises instead: it is a
+    wrongly-typed item ID, not a foreign ID, and must not become a new row.
     """
     item_ids: List[Optional[int]] = []
     foreign: List[Any] = []
@@ -58,44 +149,18 @@ def _split_caller_ids(ids: List[Any]) -> Tuple[List[Optional[int]], List[Any]]:
         if x is None:
             item_ids.append(None)
             continue
-        try:
-            value = int(x)
-        except (TypeError, ValueError):
-            value = 0
-        if value <= 0:  # the server issues positive ints only
-            item_ids.append(None)
+        value = _readable_item_id(x)
+        if value is None and _wrong_type_for_id(x):
+            raise ValueError(
+                f"Envector.add_texts: {x!r} is not an item ID. Item IDs are the "
+                "positive integers add_texts/add_documents return (as int or "
+                "decimal str); pass one of those to update in place, a string "
+                "of your own to insert under a server-issued ID, or None."
+            )
+        item_ids.append(value)
+        if value is None:
             foreign.append(x)
-        else:
-            item_ids.append(value)
     return item_ids, foreign
-
-
-# Item IDs travel as proto int64; a larger value cannot name a row and the
-# SDK would fail to encode it.
-_MAX_ITEM_ID = 2**63 - 1
-
-
-def _readable_item_id(value: Any) -> Optional[int]:
-    """The item ID ``value`` names exactly, or ``None`` when it names none.
-
-    For `get_by_ids`, which must never read an item the caller did not name:
-    only a positive ``int`` within int64 (the server issues item IDs as
-    ``int64``), or an ASCII decimal string of one, counts. ``bool`` and
-    ``float`` are not item IDs — ``int(True)`` is 1 and ``int(3.9)`` is 3, so
-    coercing them would return a different document — and neither are
-    non-ASCII digits such as ``"٣"`` or ``"３"``, which ``str.isdecimal``
-    accepts.
-    """
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value if 0 < value <= _MAX_ITEM_ID else None
-    if isinstance(value, str):
-        text = value.strip()
-        if text.isascii() and text.isdigit():
-            item_id = int(text)
-            return item_id if 0 < item_id <= _MAX_ITEM_ID else None
-    return None
 
 
 def _one_embedding_arg(embedding: Any, embeddings: Any) -> Any:
@@ -279,11 +344,15 @@ class Envector(VectorStore):
         not affected.
 
         ``ids`` follows LangChain's add-or-update contract as far as enVector
-        allows: an entry that is an item ID (int or numeric str, such as the
-        ``Document.id`` search results carry) updates that item in place; an ID
-        with no live row, or a non-integer ID, cannot be created, so that row is
-        inserted with a server-issued ID and a ``UserWarning``. ``None`` entries
-        insert. The returned list holds the IDs actually in the index, as
+        allows: an entry that is an item ID (a positive int or its decimal str,
+        such as the ``Document.id`` search results carry) updates that item in
+        place; an ID with no live row, or an ID of another kind (a UUID, a
+        slug), cannot be created, so that row is inserted with a server-issued
+        ID and a ``UserWarning``. ``None`` entries insert. A value that can be
+        no ID at all — a ``float`` such as ``3.0``, a ``bool``, bytes — is a
+        wrongly-typed item ID, not a foreign one, and raises ``ValueError``
+        instead of becoming a new row. ``ids`` must be a list; a bare string
+        raises ``TypeError``. The returned list holds the IDs actually in the index, as
         strings like LangChain's ``Document.id``; every method here accepts
         them back in that form.
         """
@@ -306,9 +375,10 @@ class Envector(VectorStore):
         poll_interval_s = kwargs.pop("poll_interval_s", None)
 
         if ids is not None:
+            ids = _ids_list(ids, "add_texts")
             if len(ids) != len(texts):
                 raise ValueError("texts and ids must have equal length")
-            item_ids, foreign = _split_caller_ids(list(ids))
+            item_ids, foreign = _split_caller_ids(ids)
             if foreign:
                 warnings.warn(
                     f"Envector cannot insert under caller-chosen IDs; {len(foreign)} "
@@ -431,8 +501,9 @@ class Envector(VectorStore):
         """Delete items from the encrypted index by item ID.
 
         Accepts the ``item_id`` values returned from ``add_texts`` /
-        ``add_documents``. Both ``int`` and ``str`` (numeric) IDs are accepted
-        and coerced to ``int`` before being passed to the SDK.
+        ``add_documents``, as ``str`` or ``int``. Any other value — ``bool`` and
+        ``float`` included — raises ``ValueError`` rather than being coerced onto
+        another item (``3.9`` would otherwise delete item 3).
 
         Deletion is asynchronous server-side; by default this waits until the
         affected shards are rebuilt and the remaining data is searchable again
@@ -443,6 +514,8 @@ class Envector(VectorStore):
         applies the delete when the row lands (late-binding through
         InsertShardMapList), so deleting an unmerged row is safe.
         """
+        if ids is not None:
+            ids = _ids_list(ids, "delete")
         if not ids:
             return False
         item_ids = _mutation_items(ids, "delete", dedupe=True)
@@ -494,7 +567,9 @@ class Envector(VectorStore):
             )
         item_ids = list(
             dict.fromkeys(
-                i for i in (_readable_item_id(x) for x in ids) if i is not None
+                i
+                for i in (_readable_item_id(x) for x in _ids_list(ids, "get_by_ids"))
+                if i is not None
             )
         )
         if not item_ids:
@@ -536,6 +611,7 @@ class Envector(VectorStore):
         matched no live row (missing or already deleted) — those are reported,
         not raised.
         """
+        ids = _ids_list(ids, "update_metadata")
         if not ids:
             return {"request_id": [], "not_found_item_ids": []}
         if len(texts) != len(ids):
@@ -544,7 +620,7 @@ class Envector(VectorStore):
             metadatas = [{} for _ in texts]
         if len(metadatas) != len(texts):
             raise ValueError("texts and metadatas must have equal length")
-        item_ids = _mutation_items(list(ids), "update_metadata")
+        item_ids = _mutation_items(ids, "update_metadata")
 
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
         return self._update_items(
@@ -580,6 +656,7 @@ class Envector(VectorStore):
         texts = [getattr(d, "page_content", "") for d in documents]
         metadatas = [getattr(d, "metadata", {}) for d in documents]
 
+        ids = _ids_list(ids, "update_documents")
         if not update_vectors:
             return self.update_metadata(
                 ids,
@@ -606,7 +683,7 @@ class Envector(VectorStore):
         if len(vectors) != len(ids):
             raise ValueError("ids and vectors must have equal length")
 
-        item_ids = _mutation_items(list(ids), "update_documents")
+        item_ids = _mutation_items(ids, "update_documents")
         packed = [pack_metadata(t, m) for t, m in zip(texts, metadatas)]
         return self._update_items(
             [
@@ -651,6 +728,8 @@ class Envector(VectorStore):
                 "inserted_item_ids": [],
                 "not_found_item_ids": [],
             }
+        if ids is not None:
+            ids = _ids_list(ids, "upsert_documents")
         if ids is not None and len(ids) != len(documents):
             raise ValueError("ids and documents must have equal length")
 
