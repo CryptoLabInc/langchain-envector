@@ -70,23 +70,31 @@ def _split_caller_ids(ids: List[Any]) -> Tuple[List[Optional[int]], List[Any]]:
     return item_ids, foreign
 
 
+# Item IDs travel as proto int64; a larger value cannot name a row and the
+# SDK would fail to encode it.
+_MAX_ITEM_ID = 2**63 - 1
+
+
 def _readable_item_id(value: Any) -> Optional[int]:
     """The item ID ``value`` names exactly, or ``None`` when it names none.
 
     For `get_by_ids`, which must never read an item the caller did not name:
-    only a positive ``int`` or a decimal string of one counts. ``bool`` and
+    only a positive ``int`` within int64 (the server issues item IDs as
+    ``int64``), or an ASCII decimal string of one, counts. ``bool`` and
     ``float`` are not item IDs — ``int(True)`` is 1 and ``int(3.9)`` is 3, so
-    coercing them would return a different document.
+    coercing them would return a different document — and neither are
+    non-ASCII digits such as ``"٣"`` or ``"３"``, which ``str.isdecimal``
+    accepts.
     """
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
-        return value if value > 0 else None
+        return value if 0 < value <= _MAX_ITEM_ID else None
     if isinstance(value, str):
         text = value.strip()
-        if text.isdecimal():
+        if text.isascii() and text.isdigit():
             item_id = int(text)
-            return item_id if item_id > 0 else None
+            return item_id if 0 < item_id <= _MAX_ITEM_ID else None
     return None
 
 
@@ -114,28 +122,39 @@ def _chunked(items: List[Any], size: int) -> Iterable[List[Any]]:
         yield items[start : start + size]
 
 
-def _stored_document(item: Dict[str, Any]) -> Tuple[Document, bool]:
+def _stored_document(item: Dict[str, Any]) -> Optional[Document]:
     """Turn an SDK result dict (search hit or ``get_by_ids`` entry) into a Document.
 
     The payload is the JSON envelope ``{"text": ..., "metadata": {...}}`` that
-    `add_texts` stores; anything else is taken as the document text. Returns the
-    Document and whether the payload carried any content.
+    `add_texts` stores; any other string is taken as the document text. Returns
+    ``None`` when the payload is not a document at all — ``text`` present but
+    not a string, or ``metadata`` present but not a dict, as a row written by
+    another client might be — so callers skip the row instead of failing the
+    whole call on a pydantic error.
     """
     # Metadata encryption/decryption is handled by the SDK. Envector stores a
     # single string per item; `unpack_metadata` also accepts the dict the SDK
     # returns once it has decrypted and parsed that string.
     md_obj = unpack_metadata(item.get("metadata"))
-    text = md_obj.get("text", "") if "_raw" not in md_obj else md_obj["_raw"]
-    metadata = md_obj.get("metadata", {}) if "_raw" not in md_obj else {}
-    if text is None:
-        text = ""
+    if "_raw" in md_obj:
+        raw = md_obj["_raw"]
+        text = raw if isinstance(raw, str) else ""
+        metadata: Dict[str, Any] = {}
+    else:
+        text = md_obj.get("text", "")
+        metadata = md_obj.get("metadata", {})
+        if text is None:
+            text = ""
+        if metadata is None:
+            metadata = {}
+        if not isinstance(text, str) or not isinstance(metadata, dict):
+            return None
     doc_id = item.get("id")
-    doc = Document(
+    return Document(
         page_content=text,
         metadata=metadata,
         id=str(doc_id) if doc_id is not None else None,
     )
-    return doc, bool(text or metadata)
 
 
 def _is_empty_shard_list_error(exc: Exception) -> bool:
@@ -486,7 +505,8 @@ class Envector(VectorStore):
             output_fields=self.config.index.output_fields,
             partition_name=partition_name,
         )
-        return [_stored_document(item)[0] for item in items]
+        docs = (_stored_document(item) for item in items)
+        return [doc for doc in docs if doc is not None]
 
     # -------------------------------
     # In-place mutation (pyenvector >= 1.6.0)
@@ -826,9 +846,9 @@ class Envector(VectorStore):
             if item.get("metadata") in (None, "", [], {}):
                 # Skip placeholder/empty hits returned by the backend.
                 continue
-            doc, has_content = _stored_document(item)
-            if not has_content:
-                # Treat empty text+metadata as no result.
+            doc = _stored_document(item)
+            if doc is None or not (doc.page_content or doc.metadata):
+                # Not a document, or empty text+metadata: no result.
                 continue
 
             # client-side filter

@@ -1389,7 +1389,26 @@ def test_get_by_ids_needs_an_sdk_that_has_it():
 
 
 @pytest.mark.parametrize(
-    "not_an_id", [True, False, 3.9, 3.0, "3.0", "-3", "0", " ", None, b"3", [3]]
+    "not_an_id",
+    [
+        True,
+        False,
+        3.9,
+        3.0,
+        "3.0",
+        "-3",
+        "0",
+        0,
+        -3,
+        " ",
+        None,
+        b"3",
+        [3],
+        "\u0663",  # Arabic-Indic three: str.isdecimal() accepts it
+        "\uff13",  # fullwidth three
+        2**63,  # past int64: cannot name a row, would fail proto encoding
+        str(2**63),
+    ],
 )
 def test_get_by_ids_never_reads_an_item_the_caller_did_not_name(not_an_id):
     # int(True) is 1 and int(3.9) is 3: coercing would return another document.
@@ -1410,3 +1429,64 @@ def test_get_by_ids_accepts_ints_and_decimal_strings():
     docs = store.get_by_ids([3, " 2 ", "1", 3.9, True])
     assert [d.page_content for d in docs] == ["c", "b", "a"]
     assert client.index.fetched[-1]["item_ids"] == [3, 2, 1]
+
+
+def test_get_by_ids_takes_the_largest_int64_id():
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    client.index.stored[(None, 2**63 - 1)] = '{"text": "big", "metadata": {}}'
+    assert [d.page_content for d in store.get_by_ids([str(2**63 - 1)])] == ["big"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"text": 123, "metadata": {}}',
+        '{"text": ["x"], "metadata": {}}',
+        '{"text": "x", "metadata": "m"}',
+        '{"text": "x", "metadata": [1]}',
+    ],
+)
+def test_rows_that_are_not_documents_are_skipped_not_raised(payload):
+    # A row written by another client can carry an envelope with the right
+    # keys and wrong types. Neither search nor get_by_ids may fail the whole
+    # call on it; search also must not raise before its threshold check.
+    # A JSON null for either key is "absent", not a wrong type: see
+    # test_stored_null_text_reads_as_empty_document and the test below.
+    client = FakeClient()
+    client.index.stored[(None, 1)] = '{"text": "a", "metadata": {}}'
+    client.index.stored[(None, 2)] = payload
+    client.index.search_payload = [
+        [
+            {"id": 2, "score": 0.1, "metadata": payload},
+            {"id": 1, "score": 0.9, "metadata": client.index.stored[(None, 1)]},
+        ]
+    ]
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+
+    assert [d.id for d in store.get_by_ids(["2", "1"])] == ["1"]
+    assert [d.id for d in store.similarity_search("q", k=2, score_threshold=0.5)] == [
+        "1"
+    ]
+
+
+def test_metadata_null_in_envelope_reads_as_empty_metadata():
+    client = FakeClient()
+    client.index.stored[(None, 1)] = '{"text": "a", "metadata": null}'
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    assert store.get_by_ids(["1"]) == [
+        LC_Document(page_content="a", metadata={}, id="1")
+    ]
+
+
+def test_search_skips_a_hit_with_empty_text_and_metadata():
+    # Moved into _stored_document by this change; pin the behaviour.
+    client = FakeClient()
+    client.index.search_payload = [
+        [
+            {"id": 1, "score": 0.9, "metadata": '{"text": "", "metadata": {}}'},
+            {"id": 2, "score": 0.8, "metadata": '{"text": "b", "metadata": {}}'},
+        ]
+    ]
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    assert [d.id for d in store.similarity_search("q", k=2)] == ["2"]
