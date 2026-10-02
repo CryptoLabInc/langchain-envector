@@ -38,6 +38,9 @@ class FakeIndex:
     load_calls: int = 0
     next_item_id: int = 1
     row_count: int = 0
+    # (partition_name, item_id) -> stored metadata string, for get_by_ids.
+    stored: Dict[Any, str] = field(default_factory=dict)
+    fetched: List[Dict[str, Any]] = field(default_factory=list)
 
     def load(self):
         self.load_calls += 1
@@ -87,7 +90,10 @@ class FakeIndex:
         if request_ids is not None:
             request_ids.append(f"req-ins-{len(self.inserted)}")
         self.row_count += len(metadata)
-        return self._issue_ids(len(metadata))
+        ids = self._issue_ids(len(metadata))
+        for i, m in zip(ids, metadata):
+            self.stored[(partition_name, i)] = m
+        return ids
 
     def wait_for_insert_stage(
         self,
@@ -124,7 +130,32 @@ class FakeIndex:
             }
         )
         self.row_count = max(0, self.row_count - len(item_ids))
+        for i in item_ids:
+            self.stored.pop((partition_name, i), None)
         return f"req-del-{len(self.deleted)}"
+
+    def get_by_ids(
+        self,
+        item_ids: List[int],
+        output_fields: Optional[List[str]] = None,
+        partition_name: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        self.fetched.append(
+            {
+                "item_ids": list(item_ids),
+                "output_fields": output_fields,
+                "partition_name": partition_name,
+            }
+        )
+        return [
+            {
+                "id": i,
+                "metadata": self.stored[(partition_name, i)] if output_fields else "",
+                "partition_name": partition_name or "",
+            }
+            for i in item_ids
+            if (partition_name, i) in self.stored
+        ]
 
     def update(
         self,

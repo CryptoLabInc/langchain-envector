@@ -17,7 +17,7 @@ from langchain_envector.config import (
     IndexSettings,
     KeyConfig,
 )
-from langchain_envector.vectorstore import Envector
+from langchain_envector.vectorstore import SDK_HAS_GET_BY_IDS, Envector
 
 pytestmark = pytest.mark.integration
 
@@ -64,8 +64,8 @@ class TestEnvectorVectorStore(VectorStoreIntegrationTests):
 
     @property
     def has_get_by_ids(self) -> bool:
-        # Envector does not yet support get by IDs.
-        return False
+        # Follows the installed SDK: skipped where pyenvector lacks Index.get_by_ids.
+        return SDK_HAS_GET_BY_IDS
 
     @pytest.fixture()
     def vectorstore(self) -> Generator[VectorStore, None, None]:  # type: ignore[override]
@@ -116,6 +116,13 @@ class TestEnvectorVectorStore(VectorStoreIntegrationTests):
     )
     def test_deleting_bulk_documents(self, vectorstore: VectorStore) -> None:
         super().test_deleting_bulk_documents(vectorstore)
+
+    @pytest.mark.xfail(
+        reason="enVector issues item IDs; a caller-chosen id such as 'foo' "
+        "cannot be created, so it is not among the returned ids."
+    )
+    def test_add_documents_with_existing_ids(self, vectorstore: VectorStore) -> None:
+        super().test_add_documents_with_existing_ids(vectorstore)
 
     # Async standard tests are not overridden: has_async=False makes the base
     # class skip them.

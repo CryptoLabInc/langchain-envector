@@ -6,7 +6,7 @@ Encrypted vector search for LangChain using Envector, powered by homomorphic enc
 - LangChain `VectorStore` interface with `similarity_search`, `from_texts`, etc.
 - Optional `VectorStoreRetriever` helper for quick RAG integrations.
 - Client-side encryption handled transparently by the SDK, including score thresholds and filtering.
-- In-place `delete`, `update_documents` and `upsert_documents` by item ID, plus named partitions.
+- In-place `delete`, `update_documents` and `upsert_documents` by item ID, `get_by_ids` to read documents back, plus named partitions.
 
 Requires `pyenvector >= 1.6.2`.
 
@@ -41,8 +41,10 @@ Key dataclasses live in `libs/envector/config.py`:
 - Client-side filtering requires the JSON envelope to include an object under `metadata`.
 
 ## Limitations
-- Item IDs are issued by the server (positive integers, returned as strings). Pass them back to `delete`, `update_documents`, `upsert_documents`, or as `ids` to `add_documents` to update in place — any numeric id is taken to be one of them. Other IDs cannot be created; such rows get server-issued IDs and a `UserWarning`.
-- Fetch-by-ID (`get_by_ids`) is unsupported, and so is LangChain's `indexing` API, which depends on its own IDs.
+- Item IDs are issued by the server (positive integers, returned as strings). Pass them back — as those strings or as ints — to `get_by_ids`, `delete`, `update_documents`, `upsert_documents`, or as `ids` to `add_documents` to update in place. Other IDs, such as UUIDs, cannot be created; such rows get server-issued IDs and a `UserWarning`, and `get_by_ids` never finds them.
+- LangChain's `indexing` API is unsupported, since it depends on its own IDs.
+- Item IDs are unique within a partition only; pass `partition_name` to `get_by_ids` for documents added to a named partition.
+- `get_by_ids` needs a pyenvector release that provides `Index.get_by_ids`; with an earlier pyenvector it raises `NotImplementedError`.
 - Embeddings must be unit norm: scores are inner products computed under encryption, and vectors with components outside [-1, 1] rank incorrectly.
 - A row deleted moments ago can still take a top-k slot briefly, so a search right after `delete` may return fewer than `k`; pass `fetch_k` to over-fetch.
 - Filtering happens client-side after the server returns `k` hits, so filtered results can be fewer than `k`; set `fetch_k` (or `IndexSettings.fetch_k`) to over-fetch.
@@ -175,6 +177,13 @@ result = store.upsert_documents(
     ids=[ids[0], None],
 )
 print(result["inserted_item_ids"])  # IDs issued for the ID-less entries
+```
+
+### Fetch by ID
+
+```python
+docs = store.get_by_ids(ids)  # Documents for the IDs that exist; missing IDs are skipped
+docs = store.get_by_ids(ids, partition_name="tenant_a")  # rows in a named partition
 ```
 
 ### Delete

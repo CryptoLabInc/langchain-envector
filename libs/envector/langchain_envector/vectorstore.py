@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
 from pyenvector import UpdateItem, UpsertItem
 from pyenvector.index.index import MAX_MUTATION_ITEMS_PER_CALL
+from pyenvector.index.index import Index as _SdkIndex
 
 from .config import EnvectorConfig
 from .client import EnvectorClient
 from .types import Embeddings, as_embeddings, pack_metadata, unpack_metadata
+
+# Index.get_by_ids is newer than the oldest pyenvector this package accepts.
+SDK_HAS_GET_BY_IDS = hasattr(_SdkIndex, "get_by_ids")
 
 
 def _mutation_items(
@@ -66,6 +70,34 @@ def _split_caller_ids(ids: List[Any]) -> Tuple[List[Optional[int]], List[Any]]:
     return item_ids, foreign
 
 
+# Item IDs travel as proto int64; a larger value cannot name a row and the
+# SDK would fail to encode it.
+_MAX_ITEM_ID = 2**63 - 1
+
+
+def _readable_item_id(value: Any) -> Optional[int]:
+    """The item ID ``value`` names exactly, or ``None`` when it names none.
+
+    For `get_by_ids`, which must never read an item the caller did not name:
+    only a positive ``int`` within int64 (the server issues item IDs as
+    ``int64``), or an ASCII decimal string of one, counts. ``bool`` and
+    ``float`` are not item IDs — ``int(True)`` is 1 and ``int(3.9)`` is 3, so
+    coercing them would return a different document — and neither are
+    non-ASCII digits such as ``"٣"`` or ``"３"``, which ``str.isdecimal``
+    accepts.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if 0 < value <= _MAX_ITEM_ID else None
+    if isinstance(value, str):
+        text = value.strip()
+        if text.isascii() and text.isdigit():
+            item_id = int(text)
+            return item_id if 0 < item_id <= _MAX_ITEM_ID else None
+    return None
+
+
 def _one_embedding_arg(embedding: Any, embeddings: Any) -> Any:
     """Resolve the standard positional ``embedding`` and our older
     ``embeddings=`` keyword into one value, rejecting conflicting pairs."""
@@ -88,6 +120,41 @@ def _one_embedding_arg(embedding: Any, embeddings: Any) -> Any:
 def _chunked(items: List[Any], size: int) -> Iterable[List[Any]]:
     for start in range(0, len(items), size):
         yield items[start : start + size]
+
+
+def _stored_document(item: Dict[str, Any]) -> Optional[Document]:
+    """Turn an SDK result dict (search hit or ``get_by_ids`` entry) into a Document.
+
+    The payload is the JSON envelope ``{"text": ..., "metadata": {...}}`` that
+    `add_texts` stores; any other string is taken as the document text. Returns
+    ``None`` when the payload is not a document at all — ``text`` present but
+    not a string, or ``metadata`` present but not a dict, as a row written by
+    another client might be — so callers skip the row instead of failing the
+    whole call on a pydantic error.
+    """
+    # Metadata encryption/decryption is handled by the SDK. Envector stores a
+    # single string per item; `unpack_metadata` also accepts the dict the SDK
+    # returns once it has decrypted and parsed that string.
+    md_obj = unpack_metadata(item.get("metadata"))
+    if "_raw" in md_obj:
+        raw = md_obj["_raw"]
+        text = raw if isinstance(raw, str) else ""
+        metadata: Dict[str, Any] = {}
+    else:
+        text = md_obj.get("text", "")
+        metadata = md_obj.get("metadata", {})
+        if text is None:
+            text = ""
+        if metadata is None:
+            metadata = {}
+        if not isinstance(text, str) or not isinstance(metadata, dict):
+            return None
+    doc_id = item.get("id")
+    return Document(
+        page_content=text,
+        metadata=metadata,
+        id=str(doc_id) if doc_id is not None else None,
+    )
 
 
 def _is_empty_shard_list_error(exc: Exception) -> bool:
@@ -393,6 +460,53 @@ class Envector(VectorStore):
             partition_name=partition_name,
         )
         return True
+
+    def get_by_ids(
+        self, ids: Sequence[str], /, *, partition_name: Optional[str] = None
+    ) -> List[Document]:
+        """Read documents by item ID, without a search.
+
+        Takes the IDs `add_texts` / `add_documents` return, or a search
+        result's ``Document.id``. Every live item comes back as a ``Document``
+        whose ``id`` is its item ID, in the order of ``ids``; repeated IDs are
+        read once. IDs that match no live row — never issued, deleted, or not
+        enVector item IDs at all — are left out rather than raised, as
+        LangChain's contract asks.
+
+        Liveness here is the row's own state, not search visibility. A document
+        is readable as soon as `add_texts` returns, before any merge, so it can
+        come back from ``get_by_ids`` while ``similarity_search`` does not find
+        it yet. A deleted document stops being readable as soon as `delete`
+        returns. After an `update_documents` that replaces the vector and is
+        not awaited (``await_completion=False``), this returns the new content
+        while search may leave the document out until the new vector is
+        searchable. These differences are expected.
+
+        Item IDs are unique within a partition only: pass the ``partition_name``
+        a document was added under. Without it the default partition is read,
+        where the same ID may be a different document.
+        """
+        index = self.client.index
+        if not hasattr(index, "get_by_ids"):
+            raise NotImplementedError(
+                "Envector.get_by_ids needs a pyenvector release that provides "
+                "Index.get_by_ids; upgrade pyenvector."
+            )
+        item_ids = list(
+            dict.fromkeys(
+                i for i in (_readable_item_id(x) for x in ids) if i is not None
+            )
+        )
+        if not item_ids:
+            return []
+        # The SDK splits the request at the server's per-call cap.
+        items = index.get_by_ids(
+            item_ids,
+            output_fields=self.config.index.output_fields,
+            partition_name=partition_name,
+        )
+        docs = (_stored_document(item) for item in items)
+        return [doc for doc in docs if doc is not None]
 
     # -------------------------------
     # In-place mutation (pyenvector >= 1.6.0)
@@ -729,38 +843,23 @@ class Envector(VectorStore):
         for item in result:
             # item = {"id": ..., "score": float, "metadata": [str] or {...}}
             score = float(item.get("score", 0.0))
-            md_obj_raw = item.get("metadata")
-            if md_obj_raw in (None, "", [], {}):
+            if item.get("metadata") in (None, "", [], {}):
                 # Skip placeholder/empty hits returned by the backend.
                 continue
-
-            # Metadata encryption/decryption is handled by the SDK.
-            # Envector currently supports a single associated data field (string).
-            # Convention: if the string is JSON like {"text": str, "metadata": {...}},
-            # we unpack it; otherwise, we treat the raw string as the document text.
-            md_obj = unpack_metadata(md_obj_raw)
-
-            text = md_obj.get("text", "") if "_raw" not in md_obj else md_obj["_raw"]
-            metadata = md_obj.get("metadata", {}) if "_raw" not in md_obj else {}
-            if not text and not metadata:
-                # Treat empty text+metadata as no result.
+            doc = _stored_document(item)
+            if doc is None or not (doc.page_content or doc.metadata):
+                # Not a document, or empty text+metadata: no result.
                 continue
 
             # client-side filter
             if filter:
                 # simple dict-equality filter on top-level user metadata
-                matched = all(metadata.get(k) == v for k, v in filter.items())
+                matched = all(doc.metadata.get(k) == v for k, v in filter.items())
                 if not matched:
                     continue
             if score_threshold is not None and score < score_threshold:
                 continue
 
-            doc_id = item.get("id")
-            doc = Document(
-                page_content=text,
-                metadata=metadata,
-                id=str(doc_id) if doc_id is not None else None,
-            )
             docs_with_scores.append((doc, score))
 
         # Trim to k after filtering
