@@ -611,7 +611,8 @@ class Envector(VectorStore):
         matched no live row (missing or already deleted) — those are reported,
         not raised.
         """
-        ids = _ids_list(ids, "update_metadata")
+        if ids is not None:  # None, like an empty list, updates nothing
+            ids = _ids_list(ids, "update_metadata")
         if not ids:
             return {"request_id": [], "not_found_item_ids": []}
         if len(texts) != len(ids):
@@ -656,7 +657,8 @@ class Envector(VectorStore):
         texts = [getattr(d, "page_content", "") for d in documents]
         metadatas = [getattr(d, "metadata", {}) for d in documents]
 
-        ids = _ids_list(ids, "update_documents")
+        if ids is not None:  # None, like an empty list, updates nothing
+            ids = _ids_list(ids, "update_documents")
         if not update_vectors:
             return self.update_metadata(
                 ids,

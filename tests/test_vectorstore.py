@@ -1706,3 +1706,33 @@ def test_signed_zero_and_plus_three_messages():
         store.delete(["+0"])
     with pytest.raises(ValueError, match="expects integer item IDs"):
         store.delete(["+3"])
+
+
+def test_none_ids_behave_like_langchain():
+    # LangChain's InMemoryVectorStore: get_by_ids(None) raises TypeError,
+    # delete(None) does nothing, add_texts(ids=None) inserts. update_* and
+    # upsert_documents have no LangChain counterpart; None updates nothing,
+    # like delete(None), and upsert_documents(ids=None) inserts.
+    client = FakeClient()
+    store = Envector(config=_cfg(), embeddings=FakeEmbeddings(dim=4), client=client)
+    store.add_texts(["a", "b"])
+    doc = LC_Document(page_content="new")
+
+    with pytest.raises(TypeError):
+        store.get_by_ids(None)
+    assert store.delete(None) is False
+    assert store.update_metadata(None, []) == {
+        "request_id": [],
+        "not_found_item_ids": [],
+    }
+    assert store.update_documents(None, []) == {
+        "request_id": [],
+        "not_found_item_ids": [],
+    }
+    assert store.update_documents(None, [], update_vectors=False) == {
+        "request_id": [],
+        "not_found_item_ids": [],
+    }
+    assert client.index.deleted == [] and client.index.updates == []
+    assert store.add_texts(["c"], ids=None) == ["3"]
+    assert store.upsert_documents([doc], ids=None)["inserted_item_ids"] == [4]
