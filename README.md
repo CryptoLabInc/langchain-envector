@@ -7,6 +7,7 @@ Encrypted vector search for LangChain using Envector, powered by homomorphic enc
 - Optional `VectorStoreRetriever` helper for quick RAG integrations.
 - Client-side encryption handled transparently by the SDK, including score thresholds and filtering.
 - In-place `delete`, `update_documents` and `upsert_documents` by item ID, `get_by_ids` to read documents back, plus named partitions.
+- `EnvectorSemanticCache`, a LangChain LLM cache that serves a similar prompt's answer from an encrypted index.
 
 Requires `pyenvector >= 1.6.2`.
 
@@ -53,6 +54,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - `add_texts` / `add_documents` take `use_row_insert`: `True` uses EnVector's single insert, `False` batch insert. By default a call with one document uses single insert and a call with two or more uses batch insert.
 - Updates wait for that store's pending inserts to merge first; when interleaving inserts and updates, set `WriteSettings.await_insert=True` and use one store instance per index.
 - `update_documents` / `upsert_documents` above 10,000 items are sent in several batches; if a later batch fails, the earlier ones stay applied.
+- `EnvectorSemanticCache` compares whole prompts, so chat prompts that share a long system message score alike; raise `similarity_threshold` in that case. Prompt text and generations are encrypted only with `IndexSettings.metadata_encryption=True`.
 
 ## Examples
 ### Configuration
@@ -211,6 +213,27 @@ store.drop_partition("tenant_a")  # removes the partition and its data
 ```
 
 Omitting `partition_name` / `partition_names` uses the default partition or searches the whole index. Updates and deletes address rows within one partition, so pass `partition_name` for rows stored in a named partition.
+
+### Semantic cache
+
+`EnvectorSemanticCache` is a LangChain LLM cache: a prompt close enough to one answered before gets the cached answer instead of a model call. Prompt embeddings are searched under encryption; with `metadata_encryption=True` the prompt text and the cached generations are encrypted at rest too.
+
+```python
+from langchain_core.globals import set_llm_cache
+from langchain_envector import EnvectorSemanticCache
+
+cache_cfg = EnvectorConfig(
+    connection=cfg.connection,
+    key=cfg.key,
+    index=IndexSettings(index_name="llm_cache", dim=vector_dim, metadata_encryption=True),
+)
+set_llm_cache(EnvectorSemanticCache(config=cache_cfg, embeddings=emb, similarity_threshold=0.9))
+
+llm.invoke("What is the capital of France?")          # calls the model, caches the answer
+llm.invoke("Tell me the capital city of France.")     # served from the cache
+```
+
+`similarity_threshold` is the cosine similarity a stored prompt needs to count as a hit (`1.0` is an identical prompt); higher is stricter. Each model configuration (LangChain's `llm_string`) is kept in its own partition, so answers never cross models. `cache.clear(llm_string=...)` drops one model's entries and `cache.clear()` drops them all, leaving other partitions of the index alone.
 
 
 ## Troubleshooting

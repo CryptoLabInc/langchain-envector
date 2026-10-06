@@ -337,3 +337,67 @@ class ScoringFakeIndex(FakeIndex):
             for t in ranked[:top_k]
         ]
         return [hits]
+
+
+@dataclass
+class StoringFakeIndex(FakeIndex):
+    """FakeIndex whose ``search`` scores the vectors it was given, per partition.
+
+    `ScoringFakeIndex` ranks a fixed corpus and ignores partitions; this one
+    keeps what ``insert`` stored under each partition and answers a search
+    from those rows only, which is what a cache keyed by partition needs.
+    ``list_partitions`` reports real row counts and ``drop_partition`` removes
+    the rows, so clearing can be asserted on.
+    """
+
+    # (partition_name, item_id) -> vector
+    vectors: Dict[Any, List[float]] = field(default_factory=dict)
+
+    def insert(self, data, metadata, partition_name=None, **kwargs):
+        ids = super().insert(data, metadata, partition_name=partition_name, **kwargs)
+        for i, v in zip(ids, data):
+            self.vectors[(partition_name, i)] = list(v)
+        return ids
+
+    def delete(self, item_ids, partition_name=None, **kwargs):
+        for i in item_ids:
+            self.vectors.pop((partition_name, i), None)
+        return super().delete(item_ids, partition_name=partition_name, **kwargs)
+
+    def drop_partition(self, partition_name: str):
+        for key in [k for k in self.vectors if k[0] == partition_name]:
+            self.vectors.pop(key)
+            self.stored.pop(key, None)
+            self.row_count = max(0, self.row_count - 1)
+        return super().drop_partition(partition_name)
+
+    def list_partitions(self):
+        return [
+            {
+                "name": n,
+                "status": "READY",
+                "num_vectors": sum(1 for k in self.vectors if k[0] == n),
+            }
+            for n in self.partitions
+        ]
+
+    def search(
+        self,
+        query: List[float],
+        top_k: int,
+        output_fields: List[str],
+        search_params: Optional[Dict[str, Any]] = None,
+        partition_names: Optional[List[str]] = None,
+    ):
+        self.searched.append({"top_k": top_k, "partition_names": partition_names})
+        rows = [
+            (key, vec)
+            for key, vec in self.vectors.items()
+            if partition_names is None or key[0] in partition_names
+        ]
+        ranked = sorted(rows, key=lambda kv: _dot(query, kv[1]), reverse=True)
+        hits: List[Dict[str, Any]] = [
+            {"id": key[1], "score": _dot(query, vec), "metadata": self.stored[key]}
+            for key, vec in ranked[:top_k]
+        ]
+        return [hits]
