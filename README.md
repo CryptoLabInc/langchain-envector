@@ -56,6 +56,7 @@ Key dataclasses live in `libs/envector/config.py`:
 - `update_documents` / `upsert_documents` above 10,000 items are sent in several batches; if a later batch fails, the earlier ones stay applied.
 - `EnvectorSemanticCache` compares whole prompts, so chat prompts that share a long system message score alike; raise `similarity_threshold` in that case. Prompt text and generations are encrypted only with `IndexSettings.metadata_encryption=True`.
 - `EnvectorSemanticCache` separates answers by the `llm_string` the chat model class builds, and `ChatOllama` leaves its model name and constructor settings out of it. With Ollama, pass settings per request (`invoke(..., options={...})`) or use one index per model.
+- Every distinct `llm_string` becomes a partition on the server, and `llm_string` includes every request setting (bound tools, `tool_choice`, a per-request `temperature`). An agent that varies these per request accumulates partitions until `clear()`; keep settings stable or give such workloads their own index.
 
 ## Examples
 ### Configuration

@@ -616,3 +616,91 @@ def test_json_that_is_not_a_langchain_message_list_never_raises(prompt):
     # A plain LLM's prompt is any string; whatever JSON it happens to be,
     # the cache must embed it as is rather than fail the model request.
     assert embedding_text(prompt) == prompt
+
+
+# -------------------------------
+# Second review: clear races, NaN scores, pending-insert growth, unreadable rows
+# -------------------------------
+
+
+def test_clear_llm_string_after_another_instance_cleared_is_a_no_op():
+    index, a, b = _two_caches()
+    a.update(FRANCE, LLM_A, ANSWER)
+    b.clear()
+    a.clear(llm_string=LLM_A)  # must not raise
+    assert index.partitions == []
+    a.update(FRANCE, LLM_A, ANSWER)
+    assert a.lookup(FRANCE, LLM_A) == ANSWER
+
+
+def test_clear_losing_a_race_to_another_clear_is_a_no_op():
+    cache = _cache()
+    cache.update(FRANCE, LLM_A, ANSWER)
+    index = _index(cache)
+    real_drop = index.drop_partition
+
+    def racing_drop(name):
+        # The other process dropped it between our listing and our drop.
+        real_drop(name)
+        raise RuntimeError(f"partition not found: {name}")
+
+    index.drop_partition = racing_drop  # type: ignore
+    cache.clear()
+    assert index.partitions == []
+
+
+def test_drop_failure_with_the_partition_present_is_raised():
+    cache = _cache()
+    cache.update(FRANCE, LLM_A, ANSWER)
+    index = _index(cache)
+
+    def failing_drop(name):
+        raise RuntimeError("server busy")
+
+    index.drop_partition = failing_drop  # type: ignore
+    with pytest.raises(RuntimeError, match="server busy"):
+        cache.clear(llm_string=LLM_A)
+    with pytest.raises(RuntimeError, match="server busy"):
+        cache.clear()
+
+
+NAN_PROMPT = "a prompt whose embedding is NaN"
+
+
+def test_nan_score_is_a_miss():
+    vectors = dict(PROMPT_VECTORS, **{NAN_PROMPT: [math.nan] * 4})
+    cache = _cache(embeddings=PromptEmbeddings(vectors))
+    cache.update(FRANCE, LLM_A, ANSWER)
+    assert cache.lookup(NAN_PROMPT, LLM_A) is None
+
+
+def test_nan_stored_row_does_not_hide_a_real_hit():
+    vectors = dict(PROMPT_VECTORS, **{NAN_PROMPT: [math.nan] * 4})
+    cache = _cache(embeddings=PromptEmbeddings(vectors))
+    cache.update(NAN_PROMPT, LLM_A, [Generation(text="garbage")])
+    cache.update(FRANCE, LLM_A, ANSWER)
+    assert cache.lookup(FRANCE_AGAIN, LLM_A) == ANSWER
+
+
+def test_updates_do_not_accumulate_pending_insert_ids():
+    cache = _cache()
+    for _ in range(5):
+        cache.update(FRANCE, LLM_A, ANSWER)
+    assert cache.vectorstore._pending_inserts == {}
+    assert len(_index(cache).inserted) == 5
+
+
+def test_unreadable_row_is_skipped_in_favour_of_a_readable_one():
+    cache = _cache()
+    cache.update(FRANCE, LLM_A, [Generation(text="first, will be corrupted")])
+    cache.update(FRANCE, LLM_A, ANSWER)
+    index = _index(cache)
+    first = (_partition_name(LLM_A), 1)
+    row = json.loads(index.stored[first])
+    row["metadata"]["return_val"] = "not json at all"
+    index.stored[first] = json.dumps(row)
+    with pytest.warns(UserWarning, match="skipping it"):
+        assert cache.lookup(FRANCE, LLM_A) == ANSWER
+    # And the miss is not re-added on every call: LangChain only calls
+    # update after a miss, and this was a hit.
+    assert len(index.inserted) == 2

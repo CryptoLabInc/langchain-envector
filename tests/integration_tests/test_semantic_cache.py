@@ -209,3 +209,22 @@ def test_two_caches_on_one_index_survive_each_others_clear(
     cache.update(GERMANY, LLM_A, [Generation(text="Berlin")])
     assert cache.lookup(GERMANY, LLM_A) == [Generation(text="Berlin")]
     assert cache.lookup(FRANCE, LLM_A) is None
+
+
+def test_clear_after_another_instance_cleared_is_a_no_op(
+    cache: EnvectorSemanticCache,
+) -> None:
+    other = EnvectorSemanticCache(
+        config=cache.vectorstore.config,
+        embeddings=PromptEmbeddings(),
+        similarity_threshold=THRESHOLD,
+    )
+    cache.update(FRANCE, LLM_A, ANSWER)
+    cache.update(FRANCE, LLM_B, ANSWER)
+    other.clear()
+    # This instance still remembers both partitions; the server has neither.
+    cache.clear(llm_string=LLM_A)
+    cache.clear()
+    assert _partitions(cache) == []
+    cache.update(FRANCE, LLM_A, ANSWER)
+    assert cache.lookup(FRANCE, LLM_A) == ANSWER

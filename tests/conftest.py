@@ -371,6 +371,7 @@ class StoringFakeIndex(FakeIndex):
         return super().delete(item_ids, partition_name=partition_name, **kwargs)
 
     def drop_partition(self, partition_name: str):
+        self._check_partition(partition_name)
         for key in [k for k in self.vectors if k[0] == partition_name]:
             self.vectors.pop(key)
             self.stored.pop(key, None)

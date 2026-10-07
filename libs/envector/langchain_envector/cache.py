@@ -298,8 +298,9 @@ class EnvectorSemanticCache(BaseCache):
 
         ``prompt`` must be a ``str``. A hit needs a row in the partition for
         ``llm_string`` scoring at least ``similarity_threshold`` and carrying
-        that same ``llm_string``. A row whose stored generations cannot be
-        deserialized is reported with a ``UserWarning`` and counts as a miss.
+        that same ``llm_string``; a NaN score never qualifies. A row whose
+        stored generations cannot be deserialized is reported with a
+        ``UserWarning`` and skipped in favour of the next qualifying row.
         """
         _check_prompt(prompt, "lookup")
         partition = _partition_name(llm_string)
@@ -321,23 +322,26 @@ class EnvectorSemanticCache(BaseCache):
             if _is_empty_shard_list_error(e) and self._partition_rows(partition) == 0:
                 return None
             raise
+        # The first hit that qualifies wins; hits are ranked, so it is the
+        # nearest qualifying row. Every other row is skipped, not returned
+        # early: a NaN score (`not score >= threshold` is True for NaN, where
+        # `score < threshold` is False) and an unreadable row must not hide a
+        # readable row that scored as well.
         for doc, score in hits:
-            if score < self.similarity_threshold:
-                # Hits are ranked, so nothing after this one passes either.
-                return None
+            if not score >= self.similarity_threshold:
+                continue
             if doc.metadata.get("llm_string") != llm_string:
                 continue
             generations = self._cached_generations(doc.metadata.get("return_val"))
             if generations is None:
                 warnings.warn(
                     f"EnvectorSemanticCache: row {doc.id} in partition {partition} "
-                    "holds generations that cannot be deserialized; treating it "
-                    "as a miss. Delete the row or clear the cache for this "
-                    "llm_string.",
+                    "holds generations that cannot be deserialized; skipping it. "
+                    "Delete the row or clear the cache for this llm_string.",
                     UserWarning,
                     stacklevel=2,
                 )
-                return None
+                continue
             return generations
         return None
 
@@ -361,13 +365,22 @@ class EnvectorSemanticCache(BaseCache):
         self._ensure_partition(partition)
         vector = self._embed(prompt)
         metadata = {"llm_string": llm_string, "return_val": dumps(generations)}
-        try:
+
+        def insert() -> None:
+            # request_ids=None: by default the store keeps each insert's
+            # request id so a later update/upsert can wait for the merge. The
+            # cache never updates in place, so those ids would only pile up
+            # for the life of the process.
             self.vectorstore.add_texts(
                 [prompt],
                 metadatas=[metadata],
                 vectors=[vector],
                 partition_name=partition,
+                request_ids=None,
             )
+
+        try:
+            insert()
         except Exception:
             # Another cache on the same index may have cleared this partition
             # since this one created it; the server then refuses the insert.
@@ -375,12 +388,7 @@ class EnvectorSemanticCache(BaseCache):
             if not self._partition_gone(partition):
                 raise
             self._ensure_partition(partition)
-            self.vectorstore.add_texts(
-                [prompt],
-                metadatas=[metadata],
-                vectors=[vector],
-                partition_name=partition,
-            )
+            insert()
 
     def clear(self, **kwargs: Any) -> None:
         """Drop cached rows.
@@ -388,8 +396,9 @@ class EnvectorSemanticCache(BaseCache):
         ``clear()`` drops every partition of the index named with
         `PARTITION_PREFIX`, including ones other processes created.
         ``clear(llm_string=...)`` drops the partition for that ``llm_string``
-        and is a no-op when there is none. Any other keyword raises
-        ``TypeError`` rather than being ignored.
+        and is a no-op when there is none, including when another cache
+        instance dropped it first. Any other keyword raises ``TypeError``
+        rather than being ignored.
         """
         llm_string = kwargs.pop("llm_string", None)
         if kwargs:
@@ -407,7 +416,14 @@ class EnvectorSemanticCache(BaseCache):
                 if name.startswith(PARTITION_PREFIX)
             ]
         for name in names:
-            self.vectorstore.drop_partition(name)
+            try:
+                self.vectorstore.drop_partition(name)
+            except Exception:
+                # Gone already: another instance cleared it after this one
+                # created it, or between this listing and this drop. Either
+                # way there is nothing left to drop; anything else re-raises.
+                if not self._partition_gone(name):
+                    raise
             with self._lock:
                 self._known_partitions.discard(name)
 
