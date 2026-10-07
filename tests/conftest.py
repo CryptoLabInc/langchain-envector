@@ -353,7 +353,13 @@ class StoringFakeIndex(FakeIndex):
     # (partition_name, item_id) -> vector
     vectors: Dict[Any, List[float]] = field(default_factory=dict)
 
+    def _check_partition(self, partition_name: Optional[str]) -> None:
+        # Like the server: a named partition must exist to be written or read.
+        if partition_name is not None and partition_name not in self.partitions:
+            raise RuntimeError(f"partition not found: {partition_name}")
+
     def insert(self, data, metadata, partition_name=None, **kwargs):
+        self._check_partition(partition_name)
         ids = super().insert(data, metadata, partition_name=partition_name, **kwargs)
         for i, v in zip(ids, data):
             self.vectors[(partition_name, i)] = list(v)
@@ -390,6 +396,8 @@ class StoringFakeIndex(FakeIndex):
         partition_names: Optional[List[str]] = None,
     ):
         self.searched.append({"top_k": top_k, "partition_names": partition_names})
+        for name in partition_names or []:
+            self._check_partition(name)
         rows = [
             (key, vec)
             for key, vec in self.vectors.items()

@@ -8,7 +8,14 @@ from typing import Dict, List
 
 import pytest
 from langchain_core.load import dumps
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    ChatMessage,
+    FunctionMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langchain_core.outputs import ChatGeneration, Generation
 
 from langchain_envector.cache import (
@@ -451,3 +458,132 @@ async def test_async_methods_delegate_to_the_sync_ones():
     assert await cache.alookup(FRANCE_AGAIN, LLM_A) == ANSWER
     await cache.aclear(llm_string=LLM_A)
     assert await cache.alookup(FRANCE, LLM_A) is None
+
+
+# -------------------------------
+# Review follow-ups: fields the model reads, and partitions cleared elsewhere
+# -------------------------------
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "w", "args": {"city": "Paris"}, "id": "c1"}],
+            )
+        ],
+        [ToolMessage(content="20 C", tool_call_id="c1")],
+        [ChatMessage(content="hi", role="user")],
+        [FunctionMessage(content="x", name="f")],
+        [HumanMessage(content="hi", name="alice")],
+        [
+            AIMessage(
+                content="",
+                additional_kwargs={"function_call": {"name": "f", "arguments": "{}"}},
+            )
+        ],
+    ],
+    ids=[
+        "ai tool_calls",
+        "tool message",
+        "chat message",
+        "function message",
+        "named human",
+        "function_call",
+    ],
+)
+def test_messages_with_fields_the_model_reads_are_embedded_as_is(messages):
+    prompt = dumps(messages)
+    assert embedding_text(prompt) == prompt
+
+
+def test_ai_message_metadata_the_model_does_not_read_is_dropped():
+    prompt = dumps(
+        [
+            HumanMessage(content="hi"),
+            AIMessage(
+                content="Paris",
+                response_metadata={"model": "x"},
+                usage_metadata={
+                    "input_tokens": 1,
+                    "output_tokens": 1,
+                    "total_tokens": 2,
+                },
+            ),
+        ]
+    )
+    assert embedding_text(prompt) == "human: hi\nai: Paris"
+
+
+def test_tool_call_arguments_keep_conversations_apart():
+    # The reviewer's case: only the tool call's argument differs, and the
+    # tool's reply is the same; the two prompts must not embed alike.
+    def conversation(city):
+        return dumps(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "w", "args": {"city": city}, "id": "c1"}],
+                ),
+                ToolMessage(content="20 C", tool_call_id="c1"),
+            ]
+        )
+
+    paris, berlin = conversation("Paris"), conversation("Berlin")
+    assert embedding_text(paris) != embedding_text(berlin)
+    assert embedding_text(paris) == paris
+
+
+def _two_caches():
+    index = StoringFakeIndex()
+    a = _cache(index=index)
+    b = _cache(index=index)
+    return index, a, b
+
+
+def test_update_recreates_a_partition_another_instance_cleared():
+    index, a, b = _two_caches()
+    a.update(FRANCE, LLM_A, ANSWER)
+    b.clear()
+    assert index.partitions == []
+    a.update(FRANCE, LLM_A, ANSWER)
+    assert index.partitions == [_partition_name(LLM_A)]
+    assert a.lookup(FRANCE, LLM_A) == ANSWER
+    assert b.lookup(FRANCE, LLM_A) == ANSWER
+
+
+def test_update_recreates_a_partition_another_instance_cleared_by_llm_string():
+    index, a, b = _two_caches()
+    a.update(FRANCE, LLM_A, ANSWER)
+    b.clear(llm_string=LLM_A)
+    a.update(GERMANY, LLM_A, [Generation(text="Berlin")])
+    assert index.partitions == [_partition_name(LLM_A)]
+    assert a.lookup(FRANCE, LLM_A) is None
+    assert a.lookup(GERMANY, LLM_A) == [Generation(text="Berlin")]
+
+
+def test_lookup_after_another_instance_cleared_is_a_miss_not_an_error():
+    index, a, b = _two_caches()
+    a.update(FRANCE, LLM_A, ANSWER)
+    b.clear()
+    assert a.lookup(FRANCE, LLM_A) is None
+    # The stale name is forgotten, so the next lookup does not even search.
+    searches = len(index.searched)
+    assert a.lookup(FRANCE, LLM_A) is None
+    assert len(index.searched) == searches
+
+
+def test_insert_failure_with_the_partition_present_is_raised():
+    cache = _cache()
+    cache.update(FRANCE, LLM_A, ANSWER)
+    index = _index(cache)
+
+    def failing_insert(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    index.insert = failing_insert  # type: ignore
+    with pytest.raises(RuntimeError, match="disk full"):
+        cache.update(GERMANY, LLM_A, ANSWER)
+    assert index.partitions == [_partition_name(LLM_A)]

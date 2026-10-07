@@ -184,3 +184,28 @@ def test_clear_one_llm_string_then_everything(cache: EnvectorSemanticCache) -> N
     # The cache is usable again after a clear.
     cache.update(FRANCE, LLM_A, ANSWER)
     assert cache.lookup(FRANCE, LLM_A) == ANSWER
+
+
+def test_two_caches_on_one_index_survive_each_others_clear(
+    cache: EnvectorSemanticCache,
+) -> None:
+    # A second instance on the same index, as two processes would have.
+    other = EnvectorSemanticCache(
+        config=cache.vectorstore.config,
+        embeddings=PromptEmbeddings(),
+        similarity_threshold=THRESHOLD,
+    )
+    cache.update(FRANCE, LLM_A, ANSWER)
+    assert other.lookup(FRANCE, LLM_A) == ANSWER
+
+    other.clear()
+    # The first instance still remembers the partition name; the server does not.
+    assert cache.lookup(FRANCE, LLM_A) is None
+    cache.update(FRANCE, LLM_A, ANSWER)
+    assert cache.lookup(FRANCE, LLM_A) == ANSWER
+    assert other.lookup(FRANCE, LLM_A) == ANSWER
+
+    other.clear(llm_string=LLM_A)
+    cache.update(GERMANY, LLM_A, [Generation(text="Berlin")])
+    assert cache.lookup(GERMANY, LLM_A) == [Generation(text="Berlin")]
+    assert cache.lookup(FRANCE, LLM_A) is None

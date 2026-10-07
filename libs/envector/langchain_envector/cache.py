@@ -107,6 +107,58 @@ def _content_text(content: Any) -> Optional[str]:
     return "\n".join(parts)
 
 
+# The message kinds `embedding_text` reduces to a ``role: content`` line: the
+# ones whose role is fixed by their type. A ``ChatMessage`` carries its role in
+# a separate field, a ``ToolMessage`` answers a specific tool call, and a
+# ``FunctionMessage`` is named after its function; all of those stay raw.
+_PLAIN_MESSAGE_TYPES = {"human", "system", "ai"}
+
+# Serialized message fields the model does not read, so they may differ
+# between two prompts that are the same conversation.
+_IGNORED_MESSAGE_KEYS = {
+    "content",
+    "type",
+    "id",
+    "response_metadata",
+    "usage_metadata",
+    "example",
+}
+
+# Fields the model does read, but only when they hold something. LangChain
+# serializes them as empty for a plain message.
+_EMPTY_ONLY_MESSAGE_KEYS = {"tool_calls", "invalid_tool_calls", "additional_kwargs"}
+
+
+def _plain_message_line(message: Any) -> Optional[str]:
+    """``role: content`` for a serialized human, system or AI message with
+    text-only content and nothing else the model reads; ``None`` otherwise.
+
+    A tool call on an AI message, a ``function_call`` in ``additional_kwargs``,
+    a speaker ``name``, a ``ChatMessage`` role, a ``ToolMessage``'s
+    ``tool_call_id`` — any field the model reads besides the text — returns
+    ``None``: two conversations that differ only there must not reduce to the
+    same text.
+    """
+    if not isinstance(message, dict) or message.get("type") != "constructor":
+        return None
+    kwargs = message.get("kwargs")
+    if not isinstance(kwargs, dict) or "content" not in kwargs:
+        return None
+    role = kwargs.get("type")
+    if role not in _PLAIN_MESSAGE_TYPES:
+        return None
+    for key, value in kwargs.items():
+        if key in _IGNORED_MESSAGE_KEYS:
+            continue
+        if key in _EMPTY_ONLY_MESSAGE_KEYS and not value:
+            continue
+        return None
+    text = _content_text(kwargs["content"])
+    if text is None:
+        return None
+    return f"{role}: {text}"
+
+
 def embedding_text(prompt: str) -> str:
     """The text that is embedded for ``prompt``.
 
@@ -114,8 +166,11 @@ def embedding_text(prompt: str) -> str:
     in LangChain's ``{"lc": 1, "type": "constructor", ...}`` envelope. Embedding
     that JSON makes every prompt look alike — the envelopes and the shared
     system message dominate — so this strips it down to one ``role: content``
-    line per message. A prompt that is not such a list, or whose content is
-    not text only (see `_content_text`), is embedded as it is.
+    line per message. That happens only when every message is a human, system
+    or AI message with text-only content and nothing else the model reads
+    (see `_plain_message_line`); a prompt with a tool call, a tool result, a
+    ``ChatMessage`` role, a speaker name or an image block, or that is not
+    such a list at all, is embedded as it is.
 
     The row stores ``prompt`` itself either way; this only shapes what the
     embedding model sees.
@@ -130,19 +185,10 @@ def embedding_text(prompt: str) -> str:
         return prompt
     lines: List[str] = []
     for message in messages:
-        if not isinstance(message, dict) or message.get("type") != "constructor":
+        line = _plain_message_line(message)
+        if line is None:
             return prompt
-        kwargs = message.get("kwargs")
-        if not isinstance(kwargs, dict) or "content" not in kwargs:
-            return prompt
-        text = _content_text(kwargs["content"])
-        if text is None:
-            return prompt
-        role = kwargs.get("type")
-        if not isinstance(role, str) or not role:
-            identifier = message.get("id")
-            role = identifier[-1] if isinstance(identifier, list) and identifier else ""
-        lines.append(f"{role}: {text}")
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -261,6 +307,10 @@ class EnvectorSemanticCache(BaseCache):
                 vector, k=_LOOKUP_K, fetch_k=_LOOKUP_K, partition_names=[partition]
             )
         except Exception as e:  # narrow-matched below, re-raised otherwise
+            # Another cache on the same index may have cleared this partition
+            # since this one last saw it: then there is nothing to find.
+            if self._partition_gone(partition):
+                return None
             # The store turns "no shards" into an empty result only when the
             # whole index is empty; a partition with no rows yet gets the same
             # answer from the server, so check that partition instead.
@@ -306,12 +356,27 @@ class EnvectorSemanticCache(BaseCache):
         partition = _partition_name(llm_string)
         self._ensure_partition(partition)
         vector = self._embed(prompt)
-        self.vectorstore.add_texts(
-            [prompt],
-            metadatas=[{"llm_string": llm_string, "return_val": dumps(generations)}],
-            vectors=[vector],
-            partition_name=partition,
-        )
+        metadata = {"llm_string": llm_string, "return_val": dumps(generations)}
+        try:
+            self.vectorstore.add_texts(
+                [prompt],
+                metadatas=[metadata],
+                vectors=[vector],
+                partition_name=partition,
+            )
+        except Exception:
+            # Another cache on the same index may have cleared this partition
+            # since this one created it; the server then refuses the insert.
+            # Recreate it once and retry; any other failure is re-raised.
+            if not self._partition_gone(partition):
+                raise
+            self._ensure_partition(partition)
+            self.vectorstore.add_texts(
+                [prompt],
+                metadatas=[metadata],
+                vectors=[vector],
+                partition_name=partition,
+            )
 
     def clear(self, **kwargs: Any) -> None:
         """Drop cached rows.
@@ -365,6 +430,20 @@ class EnvectorSemanticCache(BaseCache):
                 self._known_partitions.add(partition)
             return True
         return False
+
+    def _partition_gone(self, partition: str) -> bool:
+        """True when the server no longer lists ``partition``; forgets it then.
+
+        The in-process set of known partitions is a shortcut, not proof: a
+        `clear` from another cache instance on the same index drops the
+        partition without telling this one. Callers consult this after the
+        server refused a search or an insert.
+        """
+        if partition in self._server_partitions():
+            return False
+        with self._lock:
+            self._known_partitions.discard(partition)
+        return True
 
     def _partition_rows(self, partition: str) -> int:
         """Rows in ``partition`` as the server reports them; 0 when it is gone."""
