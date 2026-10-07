@@ -145,7 +145,10 @@ def _plain_message_line(message: Any) -> Optional[str]:
     if not isinstance(kwargs, dict) or "content" not in kwargs:
         return None
     role = kwargs.get("type")
-    if role not in _PLAIN_MESSAGE_TYPES:
+    # The prompt may be any string a plain LLM was given, so a parsed field
+    # can be any JSON value; a list or dict here would make the set lookup
+    # raise and fail the model request instead of falling back.
+    if not isinstance(role, str) or role not in _PLAIN_MESSAGE_TYPES:
         return None
     for key, value in kwargs.items():
         if key in _IGNORED_MESSAGE_KEYS:
@@ -179,7 +182,8 @@ def embedding_text(prompt: str) -> str:
         return prompt
     try:
         messages = json.loads(prompt)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # Not JSON, or nested too deep for the parser: embed as is.
         return prompt
     if not isinstance(messages, list) or not messages:
         return prompt

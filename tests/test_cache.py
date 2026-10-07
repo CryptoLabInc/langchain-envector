@@ -587,3 +587,32 @@ def test_insert_failure_with_the_partition_present_is_raised():
     with pytest.raises(RuntimeError, match="disk full"):
         cache.update(GERMANY, LLM_A, ANSWER)
     assert index.partitions == [_partition_name(LLM_A)]
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        '[{"type": "constructor", "kwargs": {"content": "x", "type": []}}]',
+        '[{"type": "constructor", "kwargs": {"content": "x", "type": {}}}]',
+        '[{"type": "constructor", "kwargs": {"content": "x", "type": null}}]',
+        '[{"type": "constructor", "kwargs": {"content": "x", "type": 7}}]',
+        '[{"type": "constructor", "kwargs": {"content": {"a": 1}, "type": "human"}}]',
+        '[{"type": "constructor", "kwargs": [1, 2]}]',
+        '[{"type": ["constructor"], "kwargs": {"content": "x", "type": "human"}}]',
+        "[" * 100_000 + "]" * 100_000,
+    ],
+    ids=[
+        "type is a list",
+        "type is a dict",
+        "type is null",
+        "type is a number",
+        "content is a dict",
+        "kwargs is a list",
+        "constructor marker is a list",
+        "nested beyond the parser's depth",
+    ],
+)
+def test_json_that_is_not_a_langchain_message_list_never_raises(prompt):
+    # A plain LLM's prompt is any string; whatever JSON it happens to be,
+    # the cache must embed it as is rather than fail the model request.
+    assert embedding_text(prompt) == prompt
