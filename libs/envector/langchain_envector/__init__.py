@@ -5,10 +5,12 @@ All code and comments are in English as per project rules.
 """
 
 from .vectorstore import Envector
+from .cache import EnvectorSemanticCache
 from .config import ConnectionConfig, EnvectorConfig, IndexSettings, KeyConfig
 
 __all__ = [
     "Envector",
+    "EnvectorSemanticCache",
     "ConnectionConfig",
     "EnvectorConfig",
     "IndexSettings",

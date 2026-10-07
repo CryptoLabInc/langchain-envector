@@ -7,6 +7,7 @@ Encrypted vector search for LangChain using Envector, powered by homomorphic enc
 - Optional `VectorStoreRetriever` helper for quick RAG integrations.
 - Client-side encryption handled transparently by the SDK, including score thresholds and filtering.
 - In-place `delete`, `update_documents` and `upsert_documents` by item ID, `get_by_ids` to read documents back, plus named partitions.
+- `EnvectorSemanticCache`, a LangChain LLM cache that serves a similar prompt's answer from an encrypted index.
 
 Requires `pyenvector >= 1.6.2`.
 
@@ -24,7 +25,7 @@ Requires `pyenvector >= 1.6.2`.
 3. Instantiate `Envector(config=cfg, embeddings=emb)` and call `add_texts`, `add_documents`, or use `as_retriever`.
 4. Run `similarity_search` or plug the retriever into your LangChain pipeline.
 
-> See `notebooks/` for end-to-end walkthroughs and the `libs/envector` package for implementation details.
+> See `notebooks/` for end-to-end walkthroughs (`01-semantic-cache.ipynb` runs the LLM cache against a local Ollama) and the `libs/envector` package for implementation details.
 
 ## Configuration
 Key dataclasses live in `libs/envector/config.py`:
@@ -53,6 +54,9 @@ Key dataclasses live in `libs/envector/config.py`:
 - `add_texts` / `add_documents` take `use_row_insert`: `True` uses EnVector's single insert, `False` batch insert. By default a call with one document uses single insert and a call with two or more uses batch insert.
 - Updates wait for that store's pending inserts to merge first; when interleaving inserts and updates, set `WriteSettings.await_insert=True` and use one store instance per index.
 - `update_documents` / `upsert_documents` above 10,000 items are sent in several batches; if a later batch fails, the earlier ones stay applied.
+- `EnvectorSemanticCache` embeds the whole prompt, like LangChain's other semantic caches. For a chat model (`ChatOpenAI`, `ChatOllama`, ...) the prompt is the serialized message list, whose JSON wrapper dominates the embedding, so different questions count as hits at the default threshold. Use the cache with a plain LLM (`OpenAI`, `OllamaLLM`, ...: string prompts), as LangChain's own semantic cache examples do, or lower `distance_threshold` far below the default for a chat model. Prompt text and generations are encrypted only with `IndexSettings.metadata_encryption=True`.
+- `EnvectorSemanticCache` separates answers by the `llm_string` the model class builds, and langchain-ollama's `OllamaLLM` and `ChatOllama` leave the model name and settings out of it, so two Ollama models share one set of entries. With Ollama, use one index per model.
+- Every distinct `llm_string` becomes a partition on the server, and `llm_string` includes every request setting (bound tools, `tool_choice`, a per-request `temperature`). An agent that varies these per request accumulates partitions until `clear()`; keep settings stable or give such workloads their own index.
 
 ## Examples
 ### Configuration
@@ -211,6 +215,27 @@ store.drop_partition("tenant_a")  # removes the partition and its data
 ```
 
 Omitting `partition_name` / `partition_names` uses the default partition or searches the whole index. Updates and deletes address rows within one partition, so pass `partition_name` for rows stored in a named partition.
+
+### Semantic cache
+
+`EnvectorSemanticCache` is a LangChain LLM cache: a prompt close enough to one answered before gets the cached answer instead of a model call. Prompt embeddings are searched under encryption; with `metadata_encryption=True` the prompt text and the cached generations are encrypted at rest too.
+
+```python
+from langchain_core.globals import set_llm_cache
+from langchain_envector import EnvectorSemanticCache
+
+cache_cfg = EnvectorConfig(
+    connection=cfg.connection,
+    key=cfg.key,
+    index=IndexSettings(index_name="llm_cache", dim=vector_dim, metadata_encryption=True),
+)
+set_llm_cache(EnvectorSemanticCache(config=cache_cfg, embeddings=emb, distance_threshold=0.2))
+
+llm.invoke("What is the capital of France?")          # calls the model, caches the answer
+llm.invoke("Tell me the capital city of France.")     # served from the cache
+```
+
+`distance_threshold` is the largest cosine distance at which a stored prompt still counts as a hit (`0` is an identical prompt); lower is stricter. The meaning and the default are those of LangChain's `RedisSemanticCache`. The prompt is embedded as LangChain hands it over, as the other LangChain semantic caches do, which is why the example uses a plain LLM rather than a chat model (see Limitations). Each model configuration (LangChain's `llm_string`) is kept in its own partition, so answers never cross models. `cache.clear(llm_string=...)` drops one model's entries and `cache.clear()` drops them all, leaving other partitions of the index alone. [`notebooks/01-semantic-cache.ipynb`](notebooks/01-semantic-cache.ipynb) walks through this with a local Ollama model.
 
 
 ## Troubleshooting
