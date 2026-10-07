@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import inspect
-import json
 import math
 import numbers
 import threading
@@ -80,138 +79,22 @@ def _unit(vector: Sequence[float]) -> List[float]:
     return [x / norm for x in values]
 
 
-def _content_text(content: Any) -> Optional[str]:
-    """The text of a message's ``content``, or ``None`` when it is not text only.
-
-    Content is a string, or a list of strings and ``{"type": "text", ...}``
-    blocks. Any other block (an image, a document) returns ``None`` so the
-    caller falls back to embedding the whole serialized prompt: two prompts
-    that differ only in such a block must not look identical.
-    """
-    if isinstance(content, str):
-        return content
-    if not isinstance(content, list):
-        return None
-    parts: List[str] = []
-    for block in content:
-        if isinstance(block, str):
-            parts.append(block)
-        elif (
-            isinstance(block, dict)
-            and block.get("type") == "text"
-            and isinstance(block.get("text"), str)
-        ):
-            parts.append(block["text"])
-        else:
-            return None
-    return "\n".join(parts)
-
-
-# The message kinds `embedding_text` reduces to a ``role: content`` line: the
-# ones whose role is fixed by their type. A ``ChatMessage`` carries its role in
-# a separate field, a ``ToolMessage`` answers a specific tool call, and a
-# ``FunctionMessage`` is named after its function; all of those stay raw.
-_PLAIN_MESSAGE_TYPES = {"human", "system", "ai"}
-
-# Serialized message fields the model does not read, so they may differ
-# between two prompts that are the same conversation.
-_IGNORED_MESSAGE_KEYS = {
-    "content",
-    "type",
-    "id",
-    "response_metadata",
-    "usage_metadata",
-    "example",
-}
-
-# Fields the model does read, but only when they hold something. LangChain
-# serializes them as empty for a plain message.
-_EMPTY_ONLY_MESSAGE_KEYS = {"tool_calls", "invalid_tool_calls", "additional_kwargs"}
-
-
-def _plain_message_line(message: Any) -> Optional[str]:
-    """``role: content`` for a serialized human, system or AI message with
-    text-only content and nothing else the model reads; ``None`` otherwise.
-
-    A tool call on an AI message, a ``function_call`` in ``additional_kwargs``,
-    a speaker ``name``, a ``ChatMessage`` role, a ``ToolMessage``'s
-    ``tool_call_id`` — any field the model reads besides the text — returns
-    ``None``: two conversations that differ only there must not reduce to the
-    same text.
-    """
-    if not isinstance(message, dict) or message.get("type") != "constructor":
-        return None
-    kwargs = message.get("kwargs")
-    if not isinstance(kwargs, dict) or "content" not in kwargs:
-        return None
-    role = kwargs.get("type")
-    # The prompt may be any string a plain LLM was given, so a parsed field
-    # can be any JSON value; a list or dict here would make the set lookup
-    # raise and fail the model request instead of falling back.
-    if not isinstance(role, str) or role not in _PLAIN_MESSAGE_TYPES:
-        return None
-    for key, value in kwargs.items():
-        if key in _IGNORED_MESSAGE_KEYS:
-            continue
-        if key in _EMPTY_ONLY_MESSAGE_KEYS and not value:
-            continue
-        return None
-    text = _content_text(kwargs["content"])
-    if text is None:
-        return None
-    return f"{role}: {text}"
-
-
-def embedding_text(prompt: str) -> str:
-    """The text that is embedded for ``prompt``.
-
-    A chat model hands the cache its messages serialized as JSON, each wrapped
-    in LangChain's ``{"lc": 1, "type": "constructor", ...}`` envelope. Embedding
-    that JSON makes every prompt look alike — the envelopes and the shared
-    system message dominate — so this strips it down to one ``role: content``
-    line per message. That happens only when every message is a human, system
-    or AI message with text-only content and nothing else the model reads
-    (see `_plain_message_line`); a prompt with a tool call, a tool result, a
-    ``ChatMessage`` role, a speaker name or an image block, or that is not
-    such a list at all, is embedded as it is.
-
-    The row stores ``prompt`` itself either way; this only shapes what the
-    embedding model sees.
-    """
-    if not prompt.lstrip().startswith("["):
-        return prompt
-    try:
-        messages = json.loads(prompt)
-    except (ValueError, RecursionError):
-        # Not JSON, or nested too deep for the parser: embed as is.
-        return prompt
-    if not isinstance(messages, list) or not messages:
-        return prompt
-    lines: List[str] = []
-    for message in messages:
-        line = _plain_message_line(message)
-        if line is None:
-            return prompt
-        lines.append(line)
-    return "\n".join(lines)
-
-
 def _check_threshold(value: Any) -> float:
-    """``value`` as the cosine-similarity threshold it names, or ``ValueError``.
+    """``value`` as the cosine-distance threshold it names, or ``ValueError``.
 
-    Accepts a real number in [-1, 1]; refuses ``bool``, NaN, strings and
+    Accepts a real number in [0, 2]; refuses ``bool``, NaN, strings and
     anything else rather than letting ``float()`` guess.
     """
     if isinstance(value, bool) or not isinstance(value, numbers.Real):
         raise ValueError(
-            "similarity_threshold must be a number between -1 and 1 "
-            f"(a cosine similarity); got {value!r}."
+            "distance_threshold must be a number between 0 and 2 "
+            f"(a cosine distance); got {value!r}."
         )
     threshold = float(value)
-    if math.isnan(threshold) or not -1.0 <= threshold <= 1.0:
+    if math.isnan(threshold) or not 0.0 <= threshold <= 2.0:
         raise ValueError(
-            "similarity_threshold must be between -1 and 1 "
-            f"(a cosine similarity); got {value!r}."
+            "distance_threshold must be between 0 and 2 "
+            f"(a cosine distance); got {value!r}."
         )
     return threshold
 
@@ -234,7 +117,7 @@ class EnvectorSemanticCache(BaseCache):
 
         set_llm_cache(
             EnvectorSemanticCache(
-                config=cfg, embeddings=emb, similarity_threshold=0.9
+                config=cfg, embeddings=emb, distance_threshold=0.2
             )
         )
 
@@ -248,11 +131,13 @@ class EnvectorSemanticCache(BaseCache):
       serialized by LangChain) gets its own partition, named after a hash of
       it, so a lookup only ever sees rows cached for the same model and
       settings, and ``clear(llm_string=...)`` is one ``drop_partition``.
-    - `lookup` embeds the prompt (see `embedding_text`), scales the vector to
-      unit norm, and takes the nearest row whose inner product — a cosine
-      similarity — is at least ``similarity_threshold``. ``1.0`` is an
-      identical prompt. A row stored under another ``llm_string`` is never
-      returned.
+    - `lookup` embeds the prompt exactly as LangChain hands it over — a plain
+      LLM's input string, or a chat model's message list serialized as JSON —
+      which is what LangChain's other semantic caches embed too. The vector
+      is scaled to unit norm and the nearest row whose cosine distance
+      (``1 - inner product``) is at most ``distance_threshold`` is the hit;
+      ``0.0`` is an identical prompt. A row stored under another
+      ``llm_string`` is never returned.
     - `update` appends a row. It does not look for an earlier row for the
       same prompt: LangChain calls `update` only after a `lookup` missed, so
       there was no row within the threshold to replace. Two processes that
@@ -270,18 +155,21 @@ class EnvectorSemanticCache(BaseCache):
         *,
         config: EnvectorConfig,
         embeddings: Embeddings,
-        similarity_threshold: float = 0.9,
+        distance_threshold: float = 0.2,
         client: Optional[Any] = None,
     ) -> None:
-        """``similarity_threshold`` is the cosine similarity a stored prompt
-        needs to count as a hit, in [-1, 1]; higher is stricter.
+        """``distance_threshold`` is the largest cosine distance (``0`` for an
+        identical prompt, ``2`` for an opposite one) at which a stored prompt
+        still counts as a hit; lower is stricter. The meaning and the default
+        are those of LangChain's ``RedisSemanticCache``.
 
-        Chat prompts that share a long system message score high against each
-        other, so raise the threshold when that is the case. ``client`` is the
-        `EnvectorClient` to use instead of one built from ``config``; tests
-        pass a fake here.
+        Because the whole prompt is embedded, prompts that share a long text
+        (a system message, a tool-call transcript) sit close together
+        whatever the question; lower the threshold for such prompts. ``client``
+        is the `EnvectorClient` to use instead of one built from ``config``;
+        tests pass a fake here.
         """
-        self.similarity_threshold = _check_threshold(similarity_threshold)
+        self.distance_threshold = _check_threshold(distance_threshold)
         self._embeddings = as_embeddings(embeddings)
         # The store gets no embeddings: this cache embeds and normalizes
         # itself and hands the store vectors.
@@ -297,8 +185,8 @@ class EnvectorSemanticCache(BaseCache):
         ``llm_string``, or ``None``.
 
         ``prompt`` must be a ``str``. A hit needs a row in the partition for
-        ``llm_string`` scoring at least ``similarity_threshold`` and carrying
-        that same ``llm_string``; a NaN score never qualifies. A row whose
+        ``llm_string`` within ``distance_threshold`` and carrying that same
+        ``llm_string``; a NaN score never qualifies. A row whose
         stored generations cannot be deserialized is reported with a
         ``UserWarning`` and skipped in favour of the next qualifying row.
         """
@@ -324,11 +212,12 @@ class EnvectorSemanticCache(BaseCache):
             raise
         # The first hit that qualifies wins; hits are ranked, so it is the
         # nearest qualifying row. Every other row is skipped, not returned
-        # early: a NaN score (`not score >= threshold` is True for NaN, where
-        # `score < threshold` is False) and an unreadable row must not hide a
-        # readable row that scored as well.
+        # early: a NaN score (`not distance <= threshold` is True for NaN,
+        # where `distance > threshold` is False) and an unreadable row must
+        # not hide a readable row that scored as well.
         for doc, score in hits:
-            if not score >= self.similarity_threshold:
+            distance = 1.0 - score
+            if not distance <= self.distance_threshold:
                 continue
             if doc.metadata.get("llm_string") != llm_string:
                 continue
@@ -433,8 +322,9 @@ class EnvectorSemanticCache(BaseCache):
     def _embed(self, prompt: str) -> List[float]:
         # Prompts are compared with prompts, so both sides use `embed_query`:
         # a model with distinct query and passage encodings must not put the
-        # stored and the looked-up prompt in different spaces.
-        return _unit(self._embeddings.embed_query(embedding_text(prompt)))
+        # stored and the looked-up prompt in different spaces. The prompt is
+        # embedded as given, like LangChain's other semantic caches do.
+        return _unit(self._embeddings.embed_query(prompt))
 
     def _server_partitions(self) -> Dict[str, Any]:
         """Partition name -> its ``list_partitions`` entry."""

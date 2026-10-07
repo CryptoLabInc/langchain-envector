@@ -8,21 +8,13 @@ from typing import Dict, List
 
 import pytest
 from langchain_core.load import dumps
-from langchain_core.messages import (
-    AIMessage,
-    ChatMessage,
-    FunctionMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
-)
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, Generation
 
 from langchain_envector.cache import (
     PARTITION_PREFIX,
     EnvectorSemanticCache,
     _partition_name,
-    embedding_text,
 )
 from langchain_envector.config import (
     ConnectionConfig,
@@ -34,22 +26,27 @@ from langchain_envector.config import (
 from .conftest import FakeClient, StoringFakeIndex
 
 # Unit-norm prompt vectors in 4 dimensions. Cosine similarity to FRANCE is
-# the first coordinate, so each prompt's score against it is known exactly.
+# the first coordinate, so each prompt's cosine distance (1 - similarity)
+# against it is known exactly.
 FRANCE = "What is the capital of France?"
-FRANCE_AGAIN = "Tell me the capital city of France."  # cos 0.95
-GERMANY = "What is the capital of Germany?"  # cos 0.6
-ON_THRESHOLD = "on the threshold"  # cos 0.9 exactly
-BELOW_THRESHOLD = "just below the threshold"  # cos 0.9 - 1e-9
+FRANCE_AGAIN = "Tell me the capital city of France."  # distance 0.05
+GERMANY = "What is the capital of Germany?"  # distance 0.4
+ON_THRESHOLD = "on the threshold"  # distance exactly BOUNDARY_THRESHOLD
+BELOW_THRESHOLD = "just past the threshold"  # distance BOUNDARY_THRESHOLD + 1e-9
 
-THRESHOLD = 0.9
-_BELOW = THRESHOLD - 1e-9
+THRESHOLD = 0.2  # cosine distance, LangChain's RedisSemanticCache default
+# The boundary test uses 0.25: 1.0 - 0.75 is exact in binary floating point,
+# where 1.0 - 0.8 is 0.19999999999999996 and would hide an off-by-one.
+BOUNDARY_THRESHOLD = 0.25
+_ON = 1.0 - BOUNDARY_THRESHOLD
+_PAST = _ON - 1e-9
 
 PROMPT_VECTORS: Dict[str, List[float]] = {
     FRANCE: [1.0, 0.0, 0.0, 0.0],
     FRANCE_AGAIN: [0.95, math.sqrt(1 - 0.95**2), 0.0, 0.0],
     GERMANY: [0.6, 0.8, 0.0, 0.0],
-    ON_THRESHOLD: [THRESHOLD, math.sqrt(1 - THRESHOLD**2), 0.0, 0.0],
-    BELOW_THRESHOLD: [_BELOW, math.sqrt(1 - _BELOW**2), 0.0, 0.0],
+    ON_THRESHOLD: [_ON, math.sqrt(1 - _ON**2), 0.0, 0.0],
+    BELOW_THRESHOLD: [_PAST, math.sqrt(1 - _PAST**2), 0.0, 0.0],
 }
 
 LLM_A = '{"model": "a"}---[("stop", None)]'
@@ -88,7 +85,7 @@ def _cache(threshold: float = THRESHOLD, **kwargs) -> EnvectorSemanticCache:
     return EnvectorSemanticCache(
         config=_cfg(),
         embeddings=embeddings,
-        similarity_threshold=threshold,
+        distance_threshold=threshold,
         client=FakeClient(index),
         **kwargs,
     )
@@ -148,10 +145,10 @@ def test_similar_prompt_hits_and_different_prompt_misses():
 @pytest.mark.parametrize(
     "prompt, expected",
     [(ON_THRESHOLD, "hit"), (BELOW_THRESHOLD, "miss")],
-    ids=["score == threshold", "score just below threshold"],
+    ids=["distance == threshold", "distance just past threshold"],
 )
 def test_threshold_boundary_is_inclusive(prompt, expected):
-    cache = _cache(THRESHOLD)
+    cache = _cache(BOUNDARY_THRESHOLD)
     cache.update(FRANCE, LLM_A, ANSWER)
     got = cache.lookup(prompt, LLM_A)
     assert (got == ANSWER) if expected == "hit" else (got is None)
@@ -332,17 +329,17 @@ def test_clear_rejects_unknown_keywords():
 
 @pytest.mark.parametrize(
     "value",
-    [True, False, float("nan"), 1.0000001, -1.0000001, "0.9", None, [0.9]],
-    ids=["True", "False", "nan", "above 1", "below -1", "str", "None", "list"],
+    [True, False, float("nan"), 2.0000001, -0.0000001, "0.2", None, [0.2]],
+    ids=["True", "False", "nan", "above 2", "below 0", "str", "None", "list"],
 )
-def test_similarity_threshold_rejects_non_cosine_values(value):
-    with pytest.raises(ValueError, match="similarity_threshold"):
+def test_distance_threshold_rejects_non_distance_values(value):
+    with pytest.raises(ValueError, match="distance_threshold"):
         _cache(value)
 
 
-@pytest.mark.parametrize("value", [-1, 0, 0.9, 1, 1.0])
-def test_similarity_threshold_accepts_the_cosine_range(value):
-    assert _cache(value).similarity_threshold == float(value)
+@pytest.mark.parametrize("value", [0, 0.2, 1, 2, 2.0])
+def test_distance_threshold_accepts_the_cosine_distance_range(value):
+    assert _cache(value).distance_threshold == float(value)
 
 
 @pytest.mark.parametrize("prompt", [None, 3, b"bytes", [FRANCE]])
@@ -399,54 +396,6 @@ def test_zero_vector_is_stored_as_is_and_never_hits():
     assert cache.lookup(FRANCE, LLM_A) is None
 
 
-def test_chat_prompts_are_embedded_as_role_content_lines():
-    prompt = dumps(
-        [
-            SystemMessage(content="You are terse."),
-            HumanMessage(content=[{"type": "text", "text": "Capital of France?"}]),
-        ]
-    )
-    assert embedding_text(prompt) == "system: You are terse.\nhuman: Capital of France?"
-
-
-@pytest.mark.parametrize(
-    "prompt",
-    [
-        "What is the capital of France?",
-        "[not json",
-        "[]",
-        "[1, 2]",
-        '[{"type": "constructor", "kwargs": {"content": "x"}}, "stray"]',
-        json.dumps([{"lc": 1, "type": "constructor", "kwargs": {"role": "x"}}]),
-        dumps([HumanMessage(content=[{"type": "image_url", "image_url": "u"}])]),
-        dumps([HumanMessage(content=[{"type": "text", "text": "a"}, {"x": 1}])]),
-    ],
-    ids=[
-        "plain text",
-        "broken json",
-        "empty list",
-        "not messages",
-        "mixed list",
-        "no content",
-        "image block",
-        "unknown block",
-    ],
-)
-def test_prompts_that_are_not_text_messages_are_embedded_as_is(prompt):
-    assert embedding_text(prompt) == prompt
-
-
-def test_embedding_uses_embed_query_on_the_reduced_text():
-    prompt = dumps([HumanMessage(content=FRANCE)])
-    embeddings = PromptEmbeddings({f"human: {FRANCE}": PROMPT_VECTORS[FRANCE]})
-    cache = _cache(embeddings=embeddings)
-    cache.update(prompt, LLM_A, ANSWER)
-    assert embeddings.queries == [f"human: {FRANCE}"]
-    # The row keeps the prompt LangChain gave us, not the reduced text.
-    stored = json.loads(_index(cache).stored[(_partition_name(LLM_A), 1)])
-    assert stored["text"] == prompt
-
-
 # -------------------------------
 # Async wrappers
 # -------------------------------
@@ -463,77 +412,6 @@ async def test_async_methods_delegate_to_the_sync_ones():
 # -------------------------------
 # Review follow-ups: fields the model reads, and partitions cleared elsewhere
 # -------------------------------
-
-
-@pytest.mark.parametrize(
-    "messages",
-    [
-        [
-            AIMessage(
-                content="",
-                tool_calls=[{"name": "w", "args": {"city": "Paris"}, "id": "c1"}],
-            )
-        ],
-        [ToolMessage(content="20 C", tool_call_id="c1")],
-        [ChatMessage(content="hi", role="user")],
-        [FunctionMessage(content="x", name="f")],
-        [HumanMessage(content="hi", name="alice")],
-        [
-            AIMessage(
-                content="",
-                additional_kwargs={"function_call": {"name": "f", "arguments": "{}"}},
-            )
-        ],
-    ],
-    ids=[
-        "ai tool_calls",
-        "tool message",
-        "chat message",
-        "function message",
-        "named human",
-        "function_call",
-    ],
-)
-def test_messages_with_fields_the_model_reads_are_embedded_as_is(messages):
-    prompt = dumps(messages)
-    assert embedding_text(prompt) == prompt
-
-
-def test_ai_message_metadata_the_model_does_not_read_is_dropped():
-    prompt = dumps(
-        [
-            HumanMessage(content="hi"),
-            AIMessage(
-                content="Paris",
-                response_metadata={"model": "x"},
-                usage_metadata={
-                    "input_tokens": 1,
-                    "output_tokens": 1,
-                    "total_tokens": 2,
-                },
-            ),
-        ]
-    )
-    assert embedding_text(prompt) == "human: hi\nai: Paris"
-
-
-def test_tool_call_arguments_keep_conversations_apart():
-    # The reviewer's case: only the tool call's argument differs, and the
-    # tool's reply is the same; the two prompts must not embed alike.
-    def conversation(city):
-        return dumps(
-            [
-                AIMessage(
-                    content="",
-                    tool_calls=[{"name": "w", "args": {"city": city}, "id": "c1"}],
-                ),
-                ToolMessage(content="20 C", tool_call_id="c1"),
-            ]
-        )
-
-    paris, berlin = conversation("Paris"), conversation("Berlin")
-    assert embedding_text(paris) != embedding_text(berlin)
-    assert embedding_text(paris) == paris
 
 
 def _two_caches():
@@ -587,35 +465,6 @@ def test_insert_failure_with_the_partition_present_is_raised():
     with pytest.raises(RuntimeError, match="disk full"):
         cache.update(GERMANY, LLM_A, ANSWER)
     assert index.partitions == [_partition_name(LLM_A)]
-
-
-@pytest.mark.parametrize(
-    "prompt",
-    [
-        '[{"type": "constructor", "kwargs": {"content": "x", "type": []}}]',
-        '[{"type": "constructor", "kwargs": {"content": "x", "type": {}}}]',
-        '[{"type": "constructor", "kwargs": {"content": "x", "type": null}}]',
-        '[{"type": "constructor", "kwargs": {"content": "x", "type": 7}}]',
-        '[{"type": "constructor", "kwargs": {"content": {"a": 1}, "type": "human"}}]',
-        '[{"type": "constructor", "kwargs": [1, 2]}]',
-        '[{"type": ["constructor"], "kwargs": {"content": "x", "type": "human"}}]',
-        "[" * 100_000 + "]" * 100_000,
-    ],
-    ids=[
-        "type is a list",
-        "type is a dict",
-        "type is null",
-        "type is a number",
-        "content is a dict",
-        "kwargs is a list",
-        "constructor marker is a list",
-        "nested beyond the parser's depth",
-    ],
-)
-def test_json_that_is_not_a_langchain_message_list_never_raises(prompt):
-    # A plain LLM's prompt is any string; whatever JSON it happens to be,
-    # the cache must embed it as is rather than fail the model request.
-    assert embedding_text(prompt) == prompt
 
 
 # -------------------------------
@@ -704,3 +553,15 @@ def test_unreadable_row_is_skipped_in_favour_of_a_readable_one():
     # And the miss is not re-added on every call: LangChain only calls
     # update after a miss, and this was a hit.
     assert len(index.inserted) == 2
+
+
+def test_the_prompt_is_embedded_exactly_as_given():
+    # Like LangChain's other semantic caches: no parsing, no reduction. A chat
+    # model's serialized message list is embedded as that JSON string.
+    prompt = dumps([HumanMessage(content=FRANCE)])
+    embeddings = PromptEmbeddings({prompt: PROMPT_VECTORS[FRANCE]})
+    cache = _cache(embeddings=embeddings)
+    cache.update(prompt, LLM_A, ANSWER)
+    assert embeddings.queries == [prompt]
+    stored = json.loads(_index(cache).stored[(_partition_name(LLM_A), 1)])
+    assert stored["text"] == prompt

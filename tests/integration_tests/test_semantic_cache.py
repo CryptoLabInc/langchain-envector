@@ -40,13 +40,13 @@ from langchain_envector.config import (
 pytestmark = pytest.mark.integration
 
 DIM = 32
-THRESHOLD = 0.9
+THRESHOLD = 0.2  # cosine distance
 
 # Prompts with known cosine similarity to FRANCE (the first coordinate).
 FRANCE = "What is the capital of France?"
-FRANCE_AGAIN = "Tell me the capital city of France."  # 0.95: hit
-GERMANY = "What is the capital of Germany?"  # 0.6: miss
-NEAR_MISS = "Which city is France's capital?"  # 0.85: miss at 0.9
+FRANCE_AGAIN = "Tell me the capital city of France."  # cos 0.95, distance 0.05: hit
+GERMANY = "What is the capital of Germany?"  # cos 0.6, distance 0.4: miss
+NEAR_MISS = "Which city is France's capital?"  # cos 0.75, distance 0.25: miss at 0.2
 
 
 def _vec(cos: float, axis: int = 1) -> List[float]:
@@ -60,7 +60,7 @@ PROMPT_VECTORS: Dict[str, List[float]] = {
     FRANCE: _vec(1.0),
     FRANCE_AGAIN: _vec(0.95),
     GERMANY: _vec(0.6),
-    NEAR_MISS: _vec(0.85),
+    NEAR_MISS: _vec(0.75),
 }
 
 LLM_A = '{"model": "a"}---[("stop", None)]'
@@ -101,7 +101,7 @@ def cache(request) -> Generator[EnvectorSemanticCache, None, None]:
         create_if_missing=True,
     )
     cache = EnvectorSemanticCache(
-        config=cfg, embeddings=PromptEmbeddings(), similarity_threshold=THRESHOLD
+        config=cfg, embeddings=PromptEmbeddings(), distance_threshold=THRESHOLD
     )
     try:
         yield cache
@@ -147,7 +147,7 @@ def test_lookup_in_a_partition_with_no_rows_is_a_miss(
 
 def test_chat_generations_round_trip(cache: EnvectorSemanticCache) -> None:
     prompt = dumps([SystemMessage(content="Be terse."), HumanMessage(content=FRANCE)])
-    PROMPT_VECTORS[f"system: Be terse.\nhuman: {FRANCE}"] = _vec(1.0, axis=2)
+    PROMPT_VECTORS[prompt] = _vec(1.0, axis=2)  # embedded as the JSON string
     answer = [ChatGeneration(message=AIMessage(content="Paris."))]
     cache.update(prompt, LLM_A, answer)
     got = cache.lookup(prompt, LLM_A)
@@ -193,7 +193,7 @@ def test_two_caches_on_one_index_survive_each_others_clear(
     other = EnvectorSemanticCache(
         config=cache.vectorstore.config,
         embeddings=PromptEmbeddings(),
-        similarity_threshold=THRESHOLD,
+        distance_threshold=THRESHOLD,
     )
     cache.update(FRANCE, LLM_A, ANSWER)
     assert other.lookup(FRANCE, LLM_A) == ANSWER
@@ -217,7 +217,7 @@ def test_clear_after_another_instance_cleared_is_a_no_op(
     other = EnvectorSemanticCache(
         config=cache.vectorstore.config,
         embeddings=PromptEmbeddings(),
-        similarity_threshold=THRESHOLD,
+        distance_threshold=THRESHOLD,
     )
     cache.update(FRANCE, LLM_A, ANSWER)
     cache.update(FRANCE, LLM_B, ANSWER)

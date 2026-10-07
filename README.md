@@ -54,8 +54,8 @@ Key dataclasses live in `libs/envector/config.py`:
 - `add_texts` / `add_documents` take `use_row_insert`: `True` uses EnVector's single insert, `False` batch insert. By default a call with one document uses single insert and a call with two or more uses batch insert.
 - Updates wait for that store's pending inserts to merge first; when interleaving inserts and updates, set `WriteSettings.await_insert=True` and use one store instance per index.
 - `update_documents` / `upsert_documents` above 10,000 items are sent in several batches; if a later batch fails, the earlier ones stay applied.
-- `EnvectorSemanticCache` compares whole prompts, so chat prompts that share a long system message score alike; raise `similarity_threshold` in that case. Prompt text and generations are encrypted only with `IndexSettings.metadata_encryption=True`.
-- `EnvectorSemanticCache` separates answers by the `llm_string` the chat model class builds, and `ChatOllama` leaves its model name and constructor settings out of it. With Ollama, pass settings per request (`invoke(..., options={...})`) or use one index per model.
+- `EnvectorSemanticCache` embeds the whole prompt, like LangChain's other semantic caches. For a chat model (`ChatOpenAI`, `ChatOllama`, ...) the prompt is the serialized message list, whose JSON wrapper dominates the embedding, so different questions count as hits at the default threshold. Use the cache with a plain LLM (`OpenAI`, `OllamaLLM`, ...: string prompts), as LangChain's own semantic cache examples do, or lower `distance_threshold` far below the default for a chat model. Prompt text and generations are encrypted only with `IndexSettings.metadata_encryption=True`.
+- `EnvectorSemanticCache` separates answers by the `llm_string` the model class builds, and langchain-ollama's `OllamaLLM` and `ChatOllama` leave the model name and settings out of it, so two Ollama models share one set of entries. With Ollama, use one index per model.
 - Every distinct `llm_string` becomes a partition on the server, and `llm_string` includes every request setting (bound tools, `tool_choice`, a per-request `temperature`). An agent that varies these per request accumulates partitions until `clear()`; keep settings stable or give such workloads their own index.
 
 ## Examples
@@ -229,13 +229,13 @@ cache_cfg = EnvectorConfig(
     key=cfg.key,
     index=IndexSettings(index_name="llm_cache", dim=vector_dim, metadata_encryption=True),
 )
-set_llm_cache(EnvectorSemanticCache(config=cache_cfg, embeddings=emb, similarity_threshold=0.9))
+set_llm_cache(EnvectorSemanticCache(config=cache_cfg, embeddings=emb, distance_threshold=0.2))
 
 llm.invoke("What is the capital of France?")          # calls the model, caches the answer
 llm.invoke("Tell me the capital city of France.")     # served from the cache
 ```
 
-`similarity_threshold` is the cosine similarity a stored prompt needs to count as a hit (`1.0` is an identical prompt); higher is stricter. Each model configuration (LangChain's `llm_string`) is kept in its own partition, so answers never cross models. `cache.clear(llm_string=...)` drops one model's entries and `cache.clear()` drops them all, leaving other partitions of the index alone. [`notebooks/01-semantic-cache.ipynb`](notebooks/01-semantic-cache.ipynb) walks through this with a local Ollama model.
+`distance_threshold` is the largest cosine distance at which a stored prompt still counts as a hit (`0` is an identical prompt); lower is stricter. The meaning and the default are those of LangChain's `RedisSemanticCache`. The prompt is embedded as LangChain hands it over, as the other LangChain semantic caches do, which is why the example uses a plain LLM rather than a chat model (see Limitations). Each model configuration (LangChain's `llm_string`) is kept in its own partition, so answers never cross models. `cache.clear(llm_string=...)` drops one model's entries and `cache.clear()` drops them all, leaving other partitions of the index alone. [`notebooks/01-semantic-cache.ipynb`](notebooks/01-semantic-cache.ipynb) walks through this with a local Ollama model.
 
 
 ## Troubleshooting
