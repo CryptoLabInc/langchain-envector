@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 from typing import Dict, List
 
 import pytest
@@ -565,3 +566,64 @@ def test_the_prompt_is_embedded_exactly_as_given():
     assert embeddings.queries == [prompt]
     stored = json.loads(_index(cache).stored[(_partition_name(LLM_A), 1)])
     assert stored["text"] == prompt
+
+
+# -------------------------------
+# Audit follow-ups: empty generations, foreign return_val, lock scope
+# -------------------------------
+
+
+def test_empty_return_val_is_not_stored():
+    cache = _cache()
+    cache.update(FRANCE, LLM_A, [])
+    assert _index(cache).inserted == []
+    assert _index(cache).partitions == []
+    assert cache.lookup(FRANCE, LLM_A) is None
+
+
+def test_row_holding_an_empty_list_is_skipped_without_a_warning():
+    # Written by another client: a valid JSON list with nothing in it.
+    # LangChain treats any list as a hit and raises IndexError on [].
+    cache = _cache()
+    cache.update(FRANCE, LLM_A, ANSWER)
+    index = _index(cache)
+    key = (_partition_name(LLM_A), 1)
+    row = json.loads(index.stored[key])
+    row["metadata"]["return_val"] = dumps([])
+    index.stored[key] = json.dumps(row)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert cache.lookup(FRANCE, LLM_A) is None
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [dumps(AIMessage(content="Paris")), dumps([AIMessage(content="Paris")])],
+    ids=["a message instead of a list", "a list of messages"],
+)
+def test_return_val_that_is_not_a_generation_list_is_a_warned_miss(stored):
+    cache = _cache()
+    cache.update(FRANCE, LLM_A, ANSWER)
+    index = _index(cache)
+    key = (_partition_name(LLM_A), 1)
+    row = json.loads(index.stored[key])
+    row["metadata"]["return_val"] = stored
+    index.stored[key] = json.dumps(row)
+    with pytest.warns(UserWarning, match="cannot be deserialized"):
+        assert cache.lookup(FRANCE, LLM_A) is None
+
+
+def test_lock_is_not_held_while_the_partition_is_created():
+    cache = _cache()
+    index = _index(cache)
+    real_create = index.create_partition
+
+    def create_and_check_lock(name):
+        # A lookup on another thread must not be blocked by this call.
+        assert cache._lock.acquire(blocking=False), "lock held across create_partition"
+        cache._lock.release()
+        return real_create(name)
+
+    index.create_partition = create_and_check_lock  # type: ignore
+    cache.update(FRANCE, LLM_A, ANSWER)
+    assert index.partitions == [_partition_name(LLM_A)]

@@ -188,7 +188,9 @@ class EnvectorSemanticCache(BaseCache):
         ``llm_string`` within ``distance_threshold`` and carrying that same
         ``llm_string``; a NaN score never qualifies. A row whose
         stored generations cannot be deserialized is reported with a
-        ``UserWarning`` and skipped in favour of the next qualifying row.
+        ``UserWarning`` and skipped in favour of the next qualifying row, and
+        a row holding no generations is skipped silently: LangChain treats
+        any list as a hit and would fail on an empty one.
         """
         _check_prompt(prompt, "lookup")
         partition = _partition_name(llm_string)
@@ -231,6 +233,8 @@ class EnvectorSemanticCache(BaseCache):
                     stacklevel=2,
                 )
                 continue
+            if not generations:
+                continue
             return generations
         return None
 
@@ -239,8 +243,10 @@ class EnvectorSemanticCache(BaseCache):
 
         ``prompt`` must be a ``str`` and every entry of ``return_val`` a
         ``Generation`` (``ChatGeneration`` included); anything else raises
-        before the server is contacted. Appends a row; see the class docstring
-        for why an earlier row for the same prompt is not replaced.
+        before the server is contacted. An empty ``return_val`` is not stored:
+        there is nothing to serve, and `lookup` would skip the row anyway.
+        Appends a row; see the class docstring for why an earlier row for the
+        same prompt is not replaced.
         """
         _check_prompt(prompt, "update")
         generations = list(return_val)
@@ -250,6 +256,8 @@ class EnvectorSemanticCache(BaseCache):
                     "EnvectorSemanticCache only caches Generation values; "
                     f"got {type(gen).__name__}."
                 )
+        if not generations:
+            return
         partition = _partition_name(llm_string)
         self._ensure_partition(partition)
         vector = self._embed(prompt)
@@ -366,18 +374,24 @@ class EnvectorSemanticCache(BaseCache):
             return 0
 
     def _ensure_partition(self, partition: str) -> None:
-        """Create ``partition`` unless it exists. Serialized within the process;
-        another process creating the same name at the same time makes
-        ``create_partition`` fail, which is fine once the partition is there."""
+        """Create ``partition`` unless it exists.
+
+        The lock guards only the in-process set, never a server call, so a
+        slow ``create_partition`` does not stall every `lookup` in other
+        threads. Two threads (or two processes) creating the same name at
+        once make the second ``create_partition`` fail, which is fine once
+        the partition is there.
+        """
         with self._lock:
             if partition in self._known_partitions:
                 return
-            if partition not in self._server_partitions():
-                try:
-                    self.vectorstore.create_partition(partition)
-                except Exception:
-                    if partition not in self._server_partitions():
-                        raise
+        if partition not in self._server_partitions():
+            try:
+                self.vectorstore.create_partition(partition)
+            except Exception:
+                if partition not in self._server_partitions():
+                    raise
+        with self._lock:
             self._known_partitions.add(partition)
 
     @staticmethod
