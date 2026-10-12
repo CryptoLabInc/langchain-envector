@@ -25,7 +25,7 @@ Requires `pyenvector >= 1.6.2`.
 3. Instantiate `Envector(config=cfg, embeddings=emb)` and call `add_texts`, `add_documents`, or use `as_retriever`.
 4. Run `similarity_search` or plug the retriever into your LangChain pipeline.
 
-> See `notebooks/` for end-to-end walkthroughs (`01-semantic-cache.ipynb` runs the LLM cache against a local Ollama) and the `libs/envector` package for implementation details.
+> See `notebooks/` for end-to-end walkthroughs (`vectorstore.ipynb` adds, searches, updates and deletes documents and uses the store as a retriever; `semantic-cache.ipynb` runs the LLM cache; both against a local Ollama) and the `libs/envector` package for implementation details.
 
 ## Configuration
 Key dataclasses live in `libs/envector/config.py`:
@@ -235,7 +235,7 @@ llm.invoke("What is the capital of France?")          # calls the model, caches 
 llm.invoke("Tell me the capital city of France.")     # served from the cache
 ```
 
-`distance_threshold` is the largest cosine distance at which a stored prompt still counts as a hit (`0` is an identical prompt); lower is stricter. The meaning and the default are those of LangChain's `RedisSemanticCache`. The prompt is embedded as LangChain hands it over, as the other LangChain semantic caches do, which is why the example uses a plain LLM rather than a chat model (see Limitations). Each model configuration (LangChain's `llm_string`) is kept in its own partition, so answers never cross models. `cache.clear(llm_string=...)` drops one model's entries and `cache.clear()` drops them all, leaving other partitions of the index alone. [`notebooks/01-semantic-cache.ipynb`](notebooks/01-semantic-cache.ipynb) walks through this with a local Ollama model.
+`distance_threshold` is the largest cosine distance at which a stored prompt still counts as a hit (`0` is an identical prompt); lower is stricter. The meaning and the default are those of LangChain's `RedisSemanticCache`. The prompt is embedded as LangChain hands it over, as the other LangChain semantic caches do, which is why the example uses a plain LLM rather than a chat model (see Limitations). Each model configuration (LangChain's `llm_string`) is kept in its own partition, so answers never cross models. `cache.clear(llm_string=...)` drops one model's entries and `cache.clear()` drops them all, leaving other partitions of the index alone. [`notebooks/semantic-cache.ipynb`](notebooks/semantic-cache.ipynb) walks through this with a local Ollama model.
 
 
 ## Troubleshooting
